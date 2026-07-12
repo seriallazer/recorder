@@ -107,7 +107,13 @@ public final class RecordingCoordinator: ObservableObject {
             let hasCapturedAudio = recording.mode == .audio
                 || finalized.microphoneStemURL != nil
                 || finalized.systemStemURL != nil
-            recording.audioFile = hasSeparateAudio || hasCapturedAudio ? finalized.audioURL.lastPathComponent : nil
+            // Movie recordings keep the movie itself as the transcription source
+            // when extracting a separate M4A companion was not possible. This
+            // prevents a valid camera recording from being discarded before ASR.
+            let audioReferenceIsPresent = FileManager.default.fileExists(atPath: finalized.audioURL.path)
+            recording.audioFile = audioReferenceIsPresent && (hasSeparateAudio || hasCapturedAudio || recording.mode == .camera)
+                ? finalized.audioURL.lastPathComponent
+                : nil
             recording.microphoneStemFile = finalized.microphoneStemURL?.lastPathComponent
             recording.systemStemFile = finalized.systemStemURL?.lastPathComponent
             recording.errorMessage = nil
