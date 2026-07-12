@@ -5,7 +5,6 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     public typealias ProgressCallback = @Sendable (_ phase: String, _ fraction: Double) -> Void
 
     private var asrModels: AsrModels?
-    private var diarizer: OfflineDiarizerManager?
     private let progress: ProgressCallback?
 
     public init(progress: ProgressCallback? = nil) {
@@ -19,7 +18,7 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     }
 
     public func prepareModels() async throws {
-        try await prepareModels(loadDiarizer: true)
+        try await prepareModels(loadDiarizer: false)
     }
 
     public func prepareModels(loadDiarizer: Bool) async throws {
@@ -39,12 +38,6 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
             self.asrModels = models
         }
 
-        if loadDiarizer, diarizer == nil {
-            progress?("Preparing speaker diarization model", 0.78)
-            let diarizer = OfflineDiarizerManager()
-            try await diarizer.prepareModels()
-            self.diarizer = diarizer
-        }
         progress?("Local models ready", 1)
     }
 
@@ -52,28 +45,32 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         try Task.checkCancellation()
 
         let tracks: [(url: URL, source: TranscriptSource, fixedSpeaker: String?)]
-        if recording.mode == .screen {
+        if recording.mode == .audio {
+            guard let audio = recording.fileURL(for: recording.audioFile, in: folder) else {
+                throw RecorderError.missingMedia
+            }
+            let fixedSpeaker = recording.configuration.capturesMicrophone ? "You" : "Audio"
+            tracks = [(audio, .microphone, fixedSpeaker)]
+        } else if recording.mode == .screen {
             var screenTracks: [(URL, TranscriptSource, String?)] = []
             if let mic = recording.fileURL(for: recording.microphoneStemFile, in: folder) {
                 screenTracks.append((mic, .microphone, "You"))
             }
             if let system = recording.fileURL(for: recording.systemStemFile, in: folder) {
-                screenTracks.append((system, .system, nil))
+                screenTracks.append((system, .system, "System Audio"))
             }
             if screenTracks.isEmpty, let audio = recording.fileURL(for: recording.audioFile, in: folder) {
-                screenTracks.append((audio, .mixed, nil))
+                screenTracks.append((audio, .mixed, "Audio"))
             }
             tracks = screenTracks
         } else if let audio = recording.fileURL(for: recording.audioFile, in: folder) {
-            let fixedSpeaker = recording.configuration.capturesMicrophone ? nil : "Audio"
-            tracks = [(audio, .microphone, fixedSpeaker)]
+            tracks = [(audio, .microphone, "You")]
         } else {
             throw RecorderError.missingMedia
         }
 
         guard !tracks.isEmpty else { throw RecorderError.missingMedia }
-        let needsDiarizer = tracks.contains { $0.fixedSpeaker == nil }
-        try await prepareModels(loadDiarizer: needsDiarizer)
+        try await prepareModels(loadDiarizer: false)
 
         var allSegments: [TranscriptSegment] = []
         for (index, track) in tracks.enumerated() {
@@ -119,34 +116,38 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
 
         let words = words(from: asrResult)
         if let fixedSpeaker {
-            return TranscriptAligner.align(words: words, speakers: [], source: source, fixedSpeaker: fixedSpeaker)
+            let aligned = TranscriptAligner.align(
+                words: words,
+                speakers: [],
+                source: source,
+                fixedSpeaker: fixedSpeaker
+            )
+            if aligned.isEmpty {
+                return fallbackSegments(from: asrResult, source: source, speaker: fixedSpeaker)
+            }
+            return aligned
         }
 
-        guard let diarizer else {
-            throw RecorderError.modelUnavailable("Speaker diarization model was not initialized.")
-        }
-        let diarization = try await diarizer.process(url)
-        let speakers = diarization.segments.map {
-            SpeakerInterval(
-                speaker: $0.speakerId,
-                startTime: TimeInterval($0.startTimeSeconds),
-                endTime: TimeInterval($0.endTimeSeconds)
-            )
-        }
-        let aligned = TranscriptAligner.align(words: words, speakers: speakers, source: source)
-        if aligned.isEmpty, !asrResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return TranscriptAligner.align(
-                words: [ASRWord(
-                    text: asrResult.text,
-                    startTime: 0,
-                    endTime: asrResult.duration,
-                    confidence: Double(asrResult.confidence)
-                )],
-                speakers: speakers,
+        return fallbackSegments(from: asrResult, source: source, speaker: "Audio")
+    }
+
+    private func fallbackSegments(
+        from result: ASRResult,
+        source: TranscriptSource,
+        speaker: String
+    ) -> [TranscriptSegment] {
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        return [
+            TranscriptSegment(
+                startTime: 0,
+                endTime: result.duration,
+                speaker: speaker,
+                text: text,
+                confidence: Double(result.confidence),
                 source: source
             )
-        }
-        return aligned
+        ]
     }
 
     private func words(from result: ASRResult) -> [ASRWord] {
