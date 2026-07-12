@@ -22,6 +22,7 @@ struct RecordingSetupView: View {
     @State private var regionWidth = 1280.0
     @State private var regionHeight = 720.0
     @State private var loadingSources = false
+    @State private var screenSourceError: String?
 
     enum Resolution: String, CaseIterable, Identifiable {
         case hd = "1280 × 720"
@@ -68,6 +69,12 @@ struct RecordingSetupView: View {
                         ForEach(filteredSources) { Text($0.name).tag(Optional($0.id)) }
                     }
                     .overlay { if loadingSources { ProgressView() } }
+                    if let screenSourceError {
+                        Label(screenSourceError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Retry screen sources") { refreshScreenSources() }
+                    }
                     Toggle("Record system audio", isOn: $capturesSystemAudio)
                     Toggle("Record microphone", isOn: $capturesMicrophone)
                     if screenTarget == .region {
@@ -117,11 +124,7 @@ struct RecordingSetupView: View {
         .task {
             microphoneID = DeviceCatalog.preferredMicrophoneID(in: microphones)
             cameraID = DeviceCatalog.preferredCameraID(in: cameras)
-            guard mode == .screen else { return }
-            loadingSources = true
-            screenSources = (try? await DeviceCatalog.screenSources()) ?? []
-            selectedSourceID = filteredSources.first?.id
-            loadingSources = false
+            if mode == .screen { refreshScreenSources() }
         }
         .onChange(of: screenTarget) { _, _ in selectedSourceID = filteredSources.first?.id }
     }
@@ -156,7 +159,43 @@ struct RecordingSetupView: View {
         switch mode {
         case .audio: microphoneID != nil
         case .camera: cameraID != nil && (!capturesMicrophone || microphoneID != nil)
-        case .screen: selectedSourceID != nil && (capturesSystemAudio || capturesMicrophone)
+        // ScreenCaptureService can use the first available display when the
+        // picker could not enumerate sources yet. Window capture still needs a
+        // concrete window ID.
+        case .screen: (screenTarget != .window || selectedSourceID != nil) && (capturesSystemAudio || capturesMicrophone)
+        }
+    }
+
+    private func refreshScreenSources() {
+        guard mode == .screen else { return }
+        loadingSources = true
+        screenSourceError = nil
+        Task {
+            let hasPermission = PermissionManager.requestScreenCapture()
+            guard hasPermission else {
+                await MainActor.run {
+                    screenSourceError = "Screen Recording permission is required. Enable Recorder in System Settings → Privacy & Security → Screen Recording."
+                    loadingSources = false
+                }
+                return
+            }
+            do {
+                let sources = try await DeviceCatalog.screenSources()
+                await MainActor.run {
+                    screenSources = sources
+                    if selectedSourceID == nil || !sources.contains(where: { $0.id == selectedSourceID }) {
+                        selectedSourceID = filteredSources.first?.id
+                    }
+                    loadingSources = false
+                }
+            } catch {
+                await MainActor.run {
+                    screenSources = []
+                    selectedSourceID = nil
+                    screenSourceError = "Could not enumerate screen sources: \(error.localizedDescription)"
+                    loadingSources = false
+                }
+            }
         }
     }
 
