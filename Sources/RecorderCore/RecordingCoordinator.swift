@@ -92,7 +92,22 @@ public final class RecordingCoordinator: ObservableObject {
         activeRecording = recording
 
         do {
-            let artifacts = try await capture.stop()
+            let artifacts: CaptureArtifacts
+            do {
+                artifacts = try await capture.stop()
+            } catch {
+                // AVCapture may report a late stop error after it has already
+                // closed the movie file. Preserve and finalize that source when
+                // it exists instead of discarding an otherwise usable movie.
+                let fallback = folder
+                    .appendingPathComponent("working", isDirectory: true)
+                    .appendingPathComponent("camera-source.mov")
+                guard recording.mode == .camera,
+                      FileManager.default.fileExists(atPath: fallback.path) else {
+                    throw error
+                }
+                artifacts = CaptureArtifacts(primaryMediaURL: fallback)
+            }
             let finalized = try await finalizer.finalize(
                 artifacts: artifacts,
                 configuration: recording.configuration,

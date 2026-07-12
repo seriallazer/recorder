@@ -89,13 +89,33 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
     }
 
     public func stop() async throws -> CaptureArtifacts {
-        guard movieOutput.isRecording, let outputURL else {
+        guard let outputURL else {
             throw RecorderError.invalidState("Movie recording is not running.")
+        }
+        // AVCaptureMovieFileOutput can finish asynchronously before the UI's
+        // stop action observes `isRecording == false`. If the file is complete,
+        // it is still a valid capture and should proceed to finalization.
+        if !movieOutput.isRecording {
+            guard FileManager.default.fileExists(atPath: outputURL.path) else {
+                throw RecorderError.invalidState("Movie recording is not running.")
+            }
+            await stopSession()
+            self.outputURL = nil
+            return CaptureArtifacts(primaryMediaURL: outputURL)
         }
         let result = await withCheckedContinuation { continuation in
             stopContinuation = continuation
             movieOutput.stopRecording()
         }
+        await stopSession()
+        levelLock.lock()
+        latestLevel = 0
+        levelLock.unlock()
+        self.outputURL = nil
+        return CaptureArtifacts(primaryMediaURL: try result.get())
+    }
+
+    private func stopSession() async {
         await withCheckedContinuation { continuation in
             sessionQueue.async {
                 self.session.stopRunning()
@@ -104,11 +124,6 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                 continuation.resume()
             }
         }
-        levelLock.lock()
-        latestLevel = 0
-        levelLock.unlock()
-        self.outputURL = nil
-        return CaptureArtifacts(primaryMediaURL: try result.get())
     }
 
     public func fileOutput(
