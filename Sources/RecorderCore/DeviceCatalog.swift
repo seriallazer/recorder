@@ -10,7 +10,9 @@ public enum DeviceCatalog {
             mediaType: .audio,
             position: .unspecified
         )
-        return discovery.devices.map { MediaDevice(id: $0.uniqueID, name: $0.localizedName) }
+        return preferredMicrophoneOrder(
+            discovery.devices.map { MediaDevice(id: $0.uniqueID, name: $0.localizedName) }
+        )
     }
 
     public static func cameras() -> [MediaDevice] {
@@ -19,7 +21,17 @@ public enum DeviceCatalog {
             mediaType: .video,
             position: .unspecified
         )
-        return discovery.devices.map { MediaDevice(id: $0.uniqueID, name: $0.localizedName) }
+        return preferredCameraOrder(
+            discovery.devices.map { MediaDevice(id: $0.uniqueID, name: $0.localizedName) }
+        )
+    }
+
+    public static func preferredMicrophoneID(in devices: [MediaDevice]) -> String? {
+        preferredMicrophoneOrder(devices).first?.id
+    }
+
+    public static func preferredCameraID(in devices: [MediaDevice]) -> String? {
+        preferredCameraOrder(devices).first?.id
     }
 
     public static func screenSources() async throws -> [ScreenSource] {
@@ -39,6 +51,42 @@ public enum DeviceCatalog {
             )
         }
         return displays + windows
+    }
+
+    static func preferredMicrophoneOrder(_ devices: [MediaDevice]) -> [MediaDevice] {
+        devices.sortedByPreference { device in
+            let name = device.name.lowercased()
+            if name.contains("macbook air") && name.contains("microphone") { return 0 }
+            if name.contains("macbook") && name.contains("microphone") { return 1 }
+            if name.contains("built-in") && name.contains("microphone") { return 2 }
+            if name.contains("internal") && name.contains("microphone") { return 3 }
+            if name.contains("microphone") { return 10 }
+            return 20
+        }
+    }
+
+    static func preferredCameraOrder(_ devices: [MediaDevice]) -> [MediaDevice] {
+        devices.sortedByPreference { device in
+            let name = device.name.lowercased()
+            if name.contains("facetime") { return 0 }
+            if name.contains("macbook air") && name.contains("camera") { return 1 }
+            if name.contains("macbook") && name.contains("camera") { return 2 }
+            if name.contains("built-in") && name.contains("camera") { return 3 }
+            if name.contains("internal") && name.contains("camera") { return 4 }
+            if name.contains("camera") { return 10 }
+            return 20
+        }
+    }
+}
+
+private extension Array where Element == MediaDevice {
+    func sortedByPreference(_ score: (MediaDevice) -> Int) -> [MediaDevice] {
+        sorted {
+            let leftScore = score($0)
+            let rightScore = score($1)
+            if leftScore != rightScore { return leftScore < rightScore }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
     }
 }
 

@@ -115,8 +115,8 @@ struct RecordingSetupView: View {
         .padding(24)
         .frame(width: 540)
         .task {
-            microphoneID = microphones.first?.id
-            cameraID = cameras.first?.id
+            microphoneID = DeviceCatalog.preferredMicrophoneID(in: microphones)
+            cameraID = DeviceCatalog.preferredCameraID(in: cameras)
             guard mode == .screen else { return }
             loadingSources = true
             screenSources = (try? await DeviceCatalog.screenSources()) ?? []
