@@ -10,6 +10,7 @@ public final class RecordingLibrary: ObservableObject {
     private let defaults: UserDefaults
     private let bookmarkKey = "RecorderLibraryBookmark"
     private let pathKey = "RecorderLibraryPath"
+    private var folderCache: [UUID: URL] = [:]
 
     public init(fileManager: FileManager = .default, defaults: UserDefaults = .standard) {
         self.fileManager = fileManager
@@ -47,11 +48,15 @@ public final class RecordingLibrary: ObservableObject {
             return
         }
 
+        var resolvedFolders: [UUID: URL] = [:]
         recordings = folders.compactMap { folder in
             let url = folder.appendingPathComponent("manifest.json")
             guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(RecordingManifest.self, from: data)
+            guard let recording = try? decoder.decode(RecordingManifest.self, from: data) else { return nil }
+            resolvedFolders[recording.id] = folder
+            return recording
         }.sorted { $0.createdAt > $1.createdAt }
+        folderCache = resolvedFolders
     }
 
     public func create(configuration: CaptureConfiguration) throws -> (RecordingManifest, URL) {
@@ -60,20 +65,25 @@ public final class RecordingLibrary: ObservableObject {
         }
 
         let id = UUID()
-        let title = Self.defaultTitle(for: configuration.mode, date: Date())
+        let createdAt = Date()
+        let title = Self.defaultTitle(for: configuration.mode, date: createdAt)
         let manifest = RecordingManifest(
             id: id,
             title: title,
+            createdAt: createdAt,
             mode: configuration.mode,
             state: .idle,
             configuration: configuration
         )
-        let folder = rootURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        let folder = try uniqueFolderURL(
+            baseName: Self.defaultFolderName(for: configuration.mode, date: createdAt)
+        )
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try fileManager.createDirectory(
             at: folder.appendingPathComponent("working", isDirectory: true),
             withIntermediateDirectories: true
         )
+        folderCache[id] = folder
         try save(manifest, in: folder)
         return (manifest, folder)
     }
@@ -91,16 +101,49 @@ public final class RecordingLibrary: ObservableObject {
         } else {
             recordings.append(updated)
         }
+        folderCache[updated.id] = targetFolder
         recordings.sort { $0.createdAt > $1.createdAt }
     }
 
     public func delete(_ manifest: RecordingManifest) throws {
         try fileManager.removeItem(at: folderURL(for: manifest.id))
         recordings.removeAll { $0.id == manifest.id }
+        folderCache[manifest.id] = nil
+    }
+
+    public func renameFolder(for manifest: RecordingManifest, identifier: String) throws -> URL {
+        let current = folderURL(for: manifest.id)
+        let baseName = Self.defaultFolderName(for: manifest.mode, date: manifest.createdAt, identifier: identifier)
+        let destination = try uniqueFolderURL(baseName: baseName)
+        guard current != destination else { return current }
+        try fileManager.moveItem(at: current, to: destination)
+        folderCache[manifest.id] = destination
+        return destination
     }
 
     public func folderURL(for id: UUID) -> URL {
-        rootURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        if let cached = folderCache[id] {
+            return cached
+        }
+
+        guard let folders = try? fileManager.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return rootURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        }
+
+        for folder in folders {
+            let manifestURL = folder.appendingPathComponent("manifest.json")
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder.recorder.decode(RecordingManifest.self, from: data),
+                  manifest.id == id else { continue }
+            folderCache[id] = folder
+            return folder
+        }
+
+        return rootURL.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
     public var availableCapacity: Int64 {
@@ -149,9 +192,54 @@ public final class RecordingLibrary: ObservableObject {
         return "\(mode.displayName) Recording \(formatter.string(from: date))"
     }
 
+    private static func defaultFolderName(for mode: RecordingMode, date: Date) -> String {
+        defaultFolderName(for: mode, date: date, identifier: nil)
+    }
+
+    private static func defaultFolderName(for mode: RecordingMode, date: Date, identifier: String?) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmm"
+        let prefix = "\(formatter.string(from: date))_\(mode.folderName)"
+        guard let identifier, !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return prefix
+        }
+        return "\(prefix)_\(identifier)"
+    }
+
+    private func uniqueFolderURL(baseName: String) throws -> URL {
+        var candidate = sanitizedFolderName(baseName)
+        var url = rootURL.appendingPathComponent(candidate, isDirectory: true)
+        var suffix = 2
+        while fileManager.fileExists(atPath: url.path) {
+            candidate = "\(sanitizedFolderName(baseName))_\(suffix)"
+            url = rootURL.appendingPathComponent(candidate, isDirectory: true)
+            suffix += 1
+        }
+        return url
+    }
+
+    private func sanitizedFolderName(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
+        let collapsed = String(scalars)
+            .split(separator: "_", omittingEmptySubsequences: true)
+            .joined(separator: "_")
+        return collapsed.isEmpty ? "recording" : collapsed
+    }
+
     private static func availableCapacity(at url: URL) -> Int64 {
         let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         return values?.volumeAvailableCapacityForImportantUsage ?? .max
+    }
+}
+
+private extension RecordingMode {
+    var folderName: String {
+        switch self {
+        case .audio: "audio"
+        case .camera: "video"
+        case .screen: "screen"
+        }
     }
 }
 

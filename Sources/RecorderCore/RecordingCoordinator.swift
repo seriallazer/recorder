@@ -127,14 +127,16 @@ public final class RecordingCoordinator: ObservableObject {
         )
 
         do {
-            let (manifest, folder) = try library.create(configuration: configuration)
+            let (manifest, _) = try library.create(configuration: configuration)
             let fileExtension = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
-            let mediaURL = folder.appendingPathComponent("recording").appendingPathExtension(fileExtension)
+            let title = sourceURL.deletingPathExtension().lastPathComponent
+            let destinationFolder = try library.renameFolder(for: manifest, identifier: title)
+            let mediaURL = destinationFolder.appendingPathComponent("recording").appendingPathExtension(fileExtension)
             try? FileManager.default.removeItem(at: mediaURL)
             try FileManager.default.copyItem(at: sourceURL, to: mediaURL)
 
             var imported = manifest
-            imported.title = sourceURL.deletingPathExtension().lastPathComponent
+            imported.title = title
             imported.state = .ready
             imported.duration = try await mediaDuration(mediaURL)
             imported.trimStart = 0
@@ -144,7 +146,7 @@ public final class RecordingCoordinator: ObservableObject {
             imported.microphoneStemFile = mediaURL.lastPathComponent
             imported.systemStemFile = nil
             imported.errorMessage = nil
-            try library.save(imported, in: folder)
+            try library.save(imported, in: destinationFolder)
             transcribe(imported)
             return imported
         } catch {
