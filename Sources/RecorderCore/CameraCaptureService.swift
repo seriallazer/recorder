@@ -8,7 +8,9 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
     private let levelLock = NSLock()
     private var latestLevel: Float = 0
     private var outputURL: URL?
+    private let recordingStateLock = NSLock()
     private var stopContinuation: CheckedContinuation<Result<URL, Error>, Never>?
+    private var completedRecordingResult: Result<URL, Error>?
 
     public override init() {
         super.init()
@@ -39,6 +41,7 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
 
         try await withCheckedThrowingContinuation { continuation in
             sessionQueue.async {
+                var sessionConfigurationBegun = false
                 do {
                     try camera.lockForConfiguration()
                     let requestedFPS = Double(configuration.framesPerSecond)
@@ -52,6 +55,7 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                     camera.unlockForConfiguration()
 
                     self.session.beginConfiguration()
+                    sessionConfigurationBegun = true
                     self.session.sessionPreset = configuration.width >= 1920 ? .hd1920x1080 : .hd1280x720
                     let cameraInput = try AVCaptureDeviceInput(device: camera)
                     guard self.session.canAddInput(cameraInput) else {
@@ -69,10 +73,13 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                     self.movieOutput.movieFragmentInterval = CMTime(seconds: 10, preferredTimescale: 600)
                     self.movieOutput.minFreeDiskSpaceLimit = 500 * 1_024 * 1_024
                     self.session.commitConfiguration()
+                    sessionConfigurationBegun = false
                     self.session.startRunning()
                     continuation.resume()
                 } catch {
-                    self.session.commitConfiguration()
+                    if sessionConfigurationBegun {
+                        self.session.commitConfiguration()
+                    }
                     self.session.inputs.forEach(self.session.removeInput)
                     self.session.outputs.forEach(self.session.removeOutput)
                     continuation.resume(throwing: error)
@@ -84,6 +91,9 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         let url = workingDirectory.appendingPathComponent("camera-source.mov")
         try? FileManager.default.removeItem(at: url)
         outputURL = url
+        recordingStateLock.lock()
+        completedRecordingResult = nil
+        recordingStateLock.unlock()
         movieOutput.startRecording(to: url, recordingDelegate: self)
         do {
             try await waitUntilRecordingStarts()
@@ -117,8 +127,16 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
             return CaptureArtifacts(primaryMediaURL: outputURL)
         }
         let result = await withCheckedContinuation { continuation in
-            stopContinuation = continuation
-            movieOutput.stopRecording()
+            recordingStateLock.lock()
+            if let completedRecordingResult {
+                self.completedRecordingResult = nil
+                recordingStateLock.unlock()
+                continuation.resume(returning: completedRecordingResult)
+            } else {
+                stopContinuation = continuation
+                recordingStateLock.unlock()
+                movieOutput.stopRecording()
+            }
         }
         await stopSession()
         levelLock.lock()
@@ -129,7 +147,7 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
     }
 
     private func waitUntilRecordingStarts() async throws {
-        for _ in 0..<40 {
+        for _ in 0..<100 {
             if movieOutput.isRecording { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -153,12 +171,24 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         from connections: [AVCaptureConnection],
         error: Error?
     ) {
-        if let error {
-            stopContinuation?.resume(returning: .failure(error))
+        let recordingFinishedSuccessfully = (error as NSError?)?
+            .userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
+        let result: Result<URL, Error>
+        if let error, !recordingFinishedSuccessfully {
+            result = .failure(error)
         } else {
-            stopContinuation?.resume(returning: .success(outputFileURL))
+            result = .success(outputFileURL)
         }
-        stopContinuation = nil
+
+        recordingStateLock.lock()
+        if let stopContinuation {
+            self.stopContinuation = nil
+            recordingStateLock.unlock()
+            stopContinuation.resume(returning: result)
+        } else {
+            completedRecordingResult = result
+            recordingStateLock.unlock()
+        }
     }
 
     public func captureOutput(

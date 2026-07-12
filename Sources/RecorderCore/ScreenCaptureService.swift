@@ -115,7 +115,9 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.artifacts = artifacts
         do {
             try await stream.startCapture()
+            try await waitUntilWriterStarts()
         } catch {
+            try? await stream.stopCapture()
             if let microphoneWriter {
                 try? await microphoneWriter.stop()
             }
@@ -135,17 +137,14 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         guard let stream, let writer, var artifacts else {
             throw RecorderError.invalidState("Screen recording is not running.")
         }
-        try await stream.stopCapture()
+        // Even if ScreenCaptureKit reports a late stop error, finish any video
+        // frames already accepted by AVAssetWriter.
+        try? await stream.stopCapture()
         if let microphoneWriter {
-            artifacts.microphoneStemURL = try await microphoneWriter.stop()
+            artifacts.microphoneStemURL = try? await microphoneWriter.stop()
         }
 
-        lock.lock()
-        videoInput?.markAsFinished()
-        audioInput?.markAsFinished()
-        let writerStatus = writer.status
-        let writerError = writer.error
-        lock.unlock()
+        let (writerStatus, writerError) = finishWriterInputs(writer)
         guard writerStatus == .writing || writerStatus == .completed else {
             writer.cancelWriting()
             throw writerError ?? RecorderError.captureFailed("The screen recording writer stopped unexpectedly.")
@@ -162,6 +161,28 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.microphoneWriter = nil
         self.artifacts = nil
         return artifacts
+    }
+
+    private func waitUntilWriterStarts() async throws {
+        for _ in 0..<100 {
+            if hasStartedWriter() { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw RecorderError.captureFailed("The screen did not produce a video frame.")
+    }
+
+    private func hasStartedWriter() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return writerStarted
+    }
+
+    private func finishWriterInputs(_ writer: AVAssetWriter) -> (AVAssetWriter.Status, Error?) {
+        lock.lock()
+        defer { lock.unlock() }
+        videoInput?.markAsFinished()
+        audioInput?.markAsFinished()
+        return (writer.status, writer.error)
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {

@@ -55,30 +55,47 @@ public struct NativeMediaFinalizer: MediaFinalizing {
             let systemURL = destinationDirectory.appendingPathComponent("system.m4a")
             let microphoneURL = destinationDirectory.appendingPathComponent("microphone.m4a")
 
-            if let mic = artifacts.microphoneStemURL {
+            var finalizedMicrophoneURL: URL?
+            if let mic = artifacts.microphoneStemURL,
+               fileManager.fileExists(atPath: mic.path),
+               try await hasAudioTrack(mic) {
                 try replaceCopy(from: mic, to: microphoneURL)
+                finalizedMicrophoneURL = microphoneURL
             }
+            var finalizedSystemURL: URL?
             if configuration.capturesSystemAudio {
-                try await exportAudio(from: artifacts.primaryMediaURL, to: systemURL)
+                do {
+                    try await exportAudio(from: artifacts.primaryMediaURL, to: systemURL)
+                    finalizedSystemURL = systemURL
+                } catch RecorderError.missingMedia {
+                    // A silent source may produce no system-audio samples. The
+                    // screen video is still valid and must be preserved.
+                }
             }
 
-            if configuration.capturesMicrophone {
+            if let finalizedMicrophoneURL {
                 try await mixScreenMedia(
                     videoURL: artifacts.primaryMediaURL,
-                    microphoneURL: microphoneURL,
+                    microphoneURL: finalizedMicrophoneURL,
                     destinationURL: mediaURL
                 )
             } else {
                 try replaceCopy(from: artifacts.primaryMediaURL, to: mediaURL)
             }
 
-            try await exportAudio(from: mediaURL, to: audioURL)
             let duration = try await mediaDuration(mediaURL)
+            let finalizedAudioURL: URL
+            do {
+                try await exportAudio(from: mediaURL, to: audioURL)
+                finalizedAudioURL = audioURL
+            } catch RecorderError.missingMedia {
+                finalizedAudioURL = mediaURL
+            }
             return FinalizedMedia(
                 mediaURL: mediaURL,
-                audioURL: audioURL,
-                microphoneStemURL: configuration.capturesMicrophone ? microphoneURL : nil,
-                systemStemURL: configuration.capturesSystemAudio ? systemURL : nil,
+                audioURL: finalizedAudioURL,
+                microphoneStemURL: finalizedMicrophoneURL,
+                systemStemURL: finalizedSystemURL,
                 duration: duration
             )
         }
@@ -171,6 +188,10 @@ public struct NativeMediaFinalizer: MediaFinalizing {
     private func mediaDuration(_ url: URL) async throws -> TimeInterval {
         let duration = try await AVURLAsset(url: url).load(.duration)
         return max(0, duration.seconds)
+    }
+
+    private func hasAudioTrack(_ url: URL) async throws -> Bool {
+        !(try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)).isEmpty
     }
 
     private func replaceCopy(from source: URL, to destination: URL) throws {

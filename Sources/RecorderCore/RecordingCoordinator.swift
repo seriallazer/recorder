@@ -132,7 +132,9 @@ public final class RecordingCoordinator: ObservableObject {
             recording.microphoneStemFile = finalized.microphoneStemURL?.lastPathComponent
             recording.systemStemFile = finalized.systemStemURL?.lastPathComponent
             recording.errorMessage = nil
-            try await createThumbnailIfNeeded(for: &recording, folder: folder)
+            // Thumbnail generation is cosmetic. A decoder failure must never
+            // turn a successfully finalized recording into a failed one.
+            try? await createThumbnailIfNeeded(for: &recording, folder: folder)
             try library.save(recording, in: folder)
             clearActiveRecording()
             if recording.audioFile != nil {
