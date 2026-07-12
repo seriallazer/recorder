@@ -29,8 +29,18 @@ public struct NativeMediaFinalizer: MediaFinalizing {
             let mediaURL = destinationDirectory.appendingPathComponent("recording.mov")
             let audioURL = destinationDirectory.appendingPathComponent("audio.m4a")
             try replaceCopy(from: artifacts.primaryMediaURL, to: mediaURL)
-            try await exportAudio(from: mediaURL, to: audioURL)
             let duration = try await mediaDuration(mediaURL)
+            do {
+                try await exportAudio(from: mediaURL, to: audioURL)
+            } catch RecorderError.missingMedia {
+                return FinalizedMedia(
+                    mediaURL: mediaURL,
+                    audioURL: mediaURL,
+                    microphoneStemURL: nil,
+                    systemStemURL: nil,
+                    duration: duration
+                )
+            }
             return FinalizedMedia(
                 mediaURL: mediaURL,
                 audioURL: audioURL,

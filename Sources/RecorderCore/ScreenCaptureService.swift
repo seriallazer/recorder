@@ -21,6 +21,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
     public var audioLevel: Float { microphoneWriter?.audioLevel ?? 0 }
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
         guard PermissionManager.requestScreenCapture() else {
             throw RecorderError.permissionDenied("screen recording")
         }
@@ -112,7 +113,21 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.writerStarted = false
         let artifacts = CaptureArtifacts(primaryMediaURL: sourceURL, microphoneStemURL: micURL)
         self.artifacts = artifacts
-        try await stream.startCapture()
+        do {
+            try await stream.startCapture()
+        } catch {
+            if let microphoneWriter {
+                try? await microphoneWriter.stop()
+            }
+            self.microphoneWriter = nil
+            self.stream = nil
+            self.writer = nil
+            self.videoInput = nil
+            self.audioInput = nil
+            self.artifacts = nil
+            writer.cancelWriting()
+            throw error
+        }
         return artifacts
     }
 
@@ -128,8 +143,17 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         lock.lock()
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
+        let writerStatus = writer.status
+        let writerError = writer.error
         lock.unlock()
+        guard writerStatus == .writing || writerStatus == .completed else {
+            writer.cancelWriting()
+            throw writerError ?? RecorderError.captureFailed("The screen recording writer stopped unexpectedly.")
+        }
         try await writer.finishWritingAsync()
+        guard writer.status == .completed else {
+            throw writer.error ?? RecorderError.captureFailed("The screen recording could not be finalized.")
+        }
 
         self.stream = nil
         self.writer = nil

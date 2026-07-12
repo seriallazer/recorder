@@ -21,6 +21,9 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
     }
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
+        guard !movieOutput.isRecording else {
+            throw RecorderError.invalidState("Camera recording is already running.")
+        }
         guard await PermissionManager.requestCamera() else {
             throw RecorderError.permissionDenied("camera")
         }
@@ -65,21 +68,19 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                     self.session.addOutput(self.movieOutput)
                     self.movieOutput.movieFragmentInterval = CMTime(seconds: 10, preferredTimescale: 600)
                     self.movieOutput.minFreeDiskSpaceLimit = 500 * 1_024 * 1_024
-                    if configuration.capturesMicrophone {
-                        let meterOutput = AVCaptureAudioDataOutput()
-                        meterOutput.setSampleBufferDelegate(self, queue: self.sessionQueue)
-                        if self.session.canAddOutput(meterOutput) { self.session.addOutput(meterOutput) }
-                    }
                     self.session.commitConfiguration()
                     self.session.startRunning()
                     continuation.resume()
                 } catch {
                     self.session.commitConfiguration()
+                    self.session.inputs.forEach(self.session.removeInput)
+                    self.session.outputs.forEach(self.session.removeOutput)
                     continuation.resume(throwing: error)
                 }
             }
         }
 
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
         let url = workingDirectory.appendingPathComponent("camera-source.mov")
         try? FileManager.default.removeItem(at: url)
         outputURL = url

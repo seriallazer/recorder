@@ -59,7 +59,14 @@ public final class RecordingCoordinator: ObservableObject {
             case .screen: ScreenCaptureService()
             }
             let working = folder.appendingPathComponent("working", isDirectory: true)
-            _ = try await capture.start(configuration: configuration, workingDirectory: working)
+            do {
+                _ = try await capture.start(configuration: configuration, workingDirectory: working)
+            } catch {
+                // A capture can fail after opening a device or writer. Give it a
+                // chance to release those resources before showing the error.
+                try? await capture.stop()
+                throw error
+            }
             activeCapture = capture
             activeFolder = folder
             activeRecording = recording
@@ -96,14 +103,20 @@ public final class RecordingCoordinator: ObservableObject {
             recording.trimStart = 0
             recording.trimEnd = finalized.duration
             recording.mediaFile = finalized.mediaURL.lastPathComponent
-            recording.audioFile = finalized.audioURL.lastPathComponent
+            let hasSeparateAudio = finalized.audioURL != finalized.mediaURL
+            let hasCapturedAudio = recording.mode == .audio
+                || finalized.microphoneStemURL != nil
+                || finalized.systemStemURL != nil
+            recording.audioFile = hasSeparateAudio || hasCapturedAudio ? finalized.audioURL.lastPathComponent : nil
             recording.microphoneStemFile = finalized.microphoneStemURL?.lastPathComponent
             recording.systemStemFile = finalized.systemStemURL?.lastPathComponent
             recording.errorMessage = nil
             try await createThumbnailIfNeeded(for: &recording, folder: folder)
             try library.save(recording, in: folder)
             clearActiveRecording()
-            transcribe(recording)
+            if recording.audioFile != nil {
+                transcribe(recording)
+            }
         } catch {
             recording.state = .failed
             recording.errorMessage = error.localizedDescription
