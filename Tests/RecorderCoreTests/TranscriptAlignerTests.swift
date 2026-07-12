@@ -46,6 +46,17 @@ final class TranscriptAlignerTests: XCTestCase {
         XCTAssertEqual(result[0].speaker, "You")
     }
 
+    func testImportedAudioSpeakerCanBeFixedWithoutDiarization() {
+        let words = [ASRWord(text: "Imported", startTime: 0, endTime: 0.7, confidence: 1)]
+        let result = TranscriptAligner.align(
+            words: words,
+            speakers: [],
+            source: .microphone,
+            fixedSpeaker: "Audio"
+        )
+        XCTAssertEqual(result[0].speaker, "Audio")
+    }
+
     func testPlainTextAppliesTrimOffset() {
         let document = TranscriptDocument(
             recordingID: UUID(),

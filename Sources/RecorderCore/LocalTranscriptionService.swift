@@ -19,30 +19,37 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     }
 
     public func prepareModels() async throws {
-        if asrModels != nil, diarizer != nil { return }
-        progress?("Downloading English transcription model", 0)
-        let models = try await AsrModels.downloadAndLoad(
-            version: .v2,
-            encoderPrecision: .int8,
-            progressHandler: { [progress] update in
-                progress?("Preparing English transcription model", update.fractionCompleted * 0.75)
-            }
-        )
-        guard try await AsrModels.isModelValid(version: .v2, encoderPrecision: .int8) else {
-            throw RecorderError.modelUnavailable("The downloaded ASR model failed validation.")
-        }
-        self.asrModels = models
+        try await prepareModels(loadDiarizer: true)
+    }
 
-        progress?("Preparing speaker diarization model", 0.78)
-        let diarizer = OfflineDiarizerManager()
-        try await diarizer.prepareModels()
-        self.diarizer = diarizer
+    public func prepareModels(loadDiarizer: Bool) async throws {
+        if asrModels == nil {
+            progress?("Downloading English transcription model", 0)
+            let models = try await AsrModels.downloadAndLoad(
+                version: .v2,
+                encoderPrecision: .int8,
+                progressHandler: { [progress] update in
+                    let cap = loadDiarizer ? 0.75 : 0.95
+                    progress?("Preparing English transcription model", update.fractionCompleted * cap)
+                }
+            )
+            guard try await AsrModels.isModelValid(version: .v2, encoderPrecision: .int8) else {
+                throw RecorderError.modelUnavailable("The downloaded ASR model failed validation.")
+            }
+            self.asrModels = models
+        }
+
+        if loadDiarizer, diarizer == nil {
+            progress?("Preparing speaker diarization model", 0.78)
+            let diarizer = OfflineDiarizerManager()
+            try await diarizer.prepareModels()
+            self.diarizer = diarizer
+        }
         progress?("Local models ready", 1)
     }
 
     public func transcribe(recording: RecordingManifest, folder: URL) async throws -> TranscriptDocument {
         try Task.checkCancellation()
-        try await prepareModels()
 
         let tracks: [(url: URL, source: TranscriptSource, fixedSpeaker: String?)]
         if recording.mode == .screen {
@@ -58,12 +65,16 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
             }
             tracks = screenTracks
         } else if let audio = recording.fileURL(for: recording.audioFile, in: folder) {
-            tracks = [(audio, .microphone, nil)]
+            let fixedSpeaker = recording.configuration.capturesMicrophone ? nil : "Audio"
+            tracks = [(audio, .microphone, fixedSpeaker)]
         } else {
             throw RecorderError.missingMedia
         }
 
         guard !tracks.isEmpty else { throw RecorderError.missingMedia }
+        let needsDiarizer = tracks.contains { $0.fixedSpeaker == nil }
+        try await prepareModels(loadDiarizer: needsDiarizer)
+
         var allSegments: [TranscriptSegment] = []
         for (index, track) in tracks.enumerated() {
             try Task.checkCancellation()
@@ -90,7 +101,7 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         source: TranscriptSource,
         fixedSpeaker: String?
     ) async throws -> [TranscriptSegment] {
-        guard let asrModels, let diarizer else {
+        guard let asrModels else {
             throw RecorderError.modelUnavailable("Models were not initialized.")
         }
 
@@ -107,6 +118,9 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
             return TranscriptAligner.align(words: words, speakers: [], source: source, fixedSpeaker: fixedSpeaker)
         }
 
+        guard let diarizer else {
+            throw RecorderError.modelUnavailable("Speaker diarization model was not initialized.")
+        }
         let diarization = try await diarizer.process(url)
         let speakers = diarization.segments.map {
             SpeakerInterval(
