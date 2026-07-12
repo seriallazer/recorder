@@ -78,15 +78,19 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         var allSegments: [TranscriptSegment] = []
         for (index, track) in tracks.enumerated() {
             try Task.checkCancellation()
-            progress?("Transcribing audio track \(index + 1) of \(tracks.count)", Double(index) / Double(tracks.count))
+            let baseProgress = 0.1 + (Double(index) / Double(tracks.count)) * 0.8
+            progress?("Transcribing audio track \(index + 1) of \(tracks.count)", baseProgress)
             let result = try await transcribeTrack(
                 url: track.url,
                 source: track.source,
                 fixedSpeaker: track.fixedSpeaker
             )
             allSegments.append(contentsOf: result)
+            let completedProgress = 0.1 + (Double(index + 1) / Double(tracks.count)) * 0.8
+            progress?("Finished audio track \(index + 1) of \(tracks.count)", completedProgress)
         }
 
+        progress?("Finalizing transcript", 0.95)
         allSegments.sort { $0.startTime < $1.startTime }
         let speakerCount = Set(allSegments.map(\.speaker)).count
         return TranscriptDocument(

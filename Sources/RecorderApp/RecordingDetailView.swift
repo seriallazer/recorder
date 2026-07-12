@@ -43,7 +43,11 @@ struct RecordingDetailView: View {
             Spacer()
             if recording.state == .transcribing {
                 VStack(alignment: .trailing, spacing: 4) {
-                    ProgressView(value: coordinator.modelProgress).frame(width: 160)
+                    if isIndeterminateTranscriptionPhase {
+                        ProgressView().frame(width: 160)
+                    } else {
+                        ProgressView(value: coordinator.modelProgress).frame(width: 160)
+                    }
                     Text(coordinator.modelPhase ?? "Transcribing locally…").font(.caption).foregroundStyle(.secondary)
                 }
                 Button("Cancel") { coordinator.cancelTranscription(for: recording.id) }
@@ -140,10 +144,8 @@ struct RecordingDetailView: View {
                     HStack {
                         Label("\(transcript.speakerCount) speaker\(transcript.speakerCount == 1 ? "" : "s") detected", systemImage: "person.2")
                         Spacer()
-                        Button("Reveal Text File") {
-                            let url = library.folderURL(for: recording.id).appendingPathComponent("transcript.txt")
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
+                        Button("Reveal Text File") { revealTranscript() }
+                        Button("Copy File Path") { copyTranscriptPath() }
                     }
                     Divider()
                     ForEach(transcript.segments) { segment in
@@ -202,6 +204,23 @@ struct RecordingDetailView: View {
         let folder = library.folderURL(for: recording.id)
         let file = recording.fileURL(for: recording.mediaFile, in: folder) ?? folder
         NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    private var transcriptURL: URL {
+        library.folderURL(for: recording.id).appendingPathComponent("transcript.txt")
+    }
+
+    private var isIndeterminateTranscriptionPhase: Bool {
+        coordinator.modelPhase?.hasPrefix("Transcribing audio track") == true
+    }
+
+    private func revealTranscript() {
+        NSWorkspace.shared.activateFileViewerSelecting([transcriptURL])
+    }
+
+    private func copyTranscriptPath() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcriptURL.path, forType: .string)
     }
 
     private func exportTrimmed() {
