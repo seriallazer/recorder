@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>Recorder</string>
+    <key>CFBundleIdentifier</key>
+    <string>local.recorder.app</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Recorder</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Recorder uses the selected camera to create local movie recordings.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Recorder uses the selected microphone for audio, movie, and screen recordings.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Recorder captures a display, window, or selected region when you start a screen recording.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Local-only recording and transcription.</string>
+</dict>
+</plist>
