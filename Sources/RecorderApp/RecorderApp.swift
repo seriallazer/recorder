@@ -5,6 +5,7 @@ extension Notification.Name {
     static let newAudioRecording = Notification.Name("Recorder.newAudioRecording")
     static let newMovieRecording = Notification.Name("Recorder.newMovieRecording")
     static let newScreenRecording = Notification.Name("Recorder.newScreenRecording")
+    static let importAudioFile = Notification.Name("Recorder.importAudioFile")
 }
 
 @main
@@ -39,6 +40,11 @@ struct RecorderApplication: App {
                     NotificationCenter.default.post(name: .newScreenRecording, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+                Divider()
+                Button("Import Audio File…") {
+                    NotificationCenter.default.post(name: .importAudioFile, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command])
             }
         }
         Settings {

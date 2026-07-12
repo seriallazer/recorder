@@ -113,6 +113,46 @@ public final class RecordingCoordinator: ObservableObject {
         }
     }
 
+    @discardableResult
+    public func importAudioFile(from sourceURL: URL) async -> RecordingManifest? {
+        guard activeCapture == nil else {
+            presentedError = "Stop the current recording before importing audio."
+            return nil
+        }
+
+        let configuration = CaptureConfiguration(
+            mode: .audio,
+            capturesSystemAudio: false,
+            capturesMicrophone: false
+        )
+
+        do {
+            let (manifest, folder) = try library.create(configuration: configuration)
+            let fileExtension = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
+            let mediaURL = folder.appendingPathComponent("recording").appendingPathExtension(fileExtension)
+            try? FileManager.default.removeItem(at: mediaURL)
+            try FileManager.default.copyItem(at: sourceURL, to: mediaURL)
+
+            var imported = manifest
+            imported.title = sourceURL.deletingPathExtension().lastPathComponent
+            imported.state = .ready
+            imported.duration = try await mediaDuration(mediaURL)
+            imported.trimStart = 0
+            imported.trimEnd = imported.duration
+            imported.mediaFile = mediaURL.lastPathComponent
+            imported.audioFile = mediaURL.lastPathComponent
+            imported.microphoneStemFile = mediaURL.lastPathComponent
+            imported.systemStemFile = nil
+            imported.errorMessage = nil
+            try library.save(imported, in: folder)
+            transcribe(imported)
+            return imported
+        } catch {
+            presentedError = error.localizedDescription
+            return nil
+        }
+    }
+
     public func transcribe(_ recording: RecordingManifest) {
         guard transcriptionTasks[recording.id] == nil else { return }
         let folder = library.folderURL(for: recording.id)
@@ -216,6 +256,11 @@ public final class RecordingCoordinator: ObservableObject {
         let url = folder.appendingPathComponent("thumbnail.jpg")
         try data.write(to: url, options: .atomic)
         recording.thumbnailFile = url.lastPathComponent
+    }
+
+    private func mediaDuration(_ url: URL) async throws -> TimeInterval {
+        let duration = try await AVURLAsset(url: url).load(.duration)
+        return max(0, duration.seconds)
     }
 
     private func startTimer() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import RecorderCore
 
 struct ContentView: View {
@@ -38,12 +39,17 @@ struct ContentView: View {
                     RecordingDetailView(recording: selectedRecording)
                         .id(selectedRecording.id)
                 } else {
-                    EmptyLibraryView { setupMode = $0 }
+                    EmptyLibraryView(
+                        start: { setupMode = $0 },
+                        importAudio: { importAudioFile() }
+                    )
                 }
             }
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button { importAudioFile() } label: { Label("Import", systemImage: "tray.and.arrow.down") }
+                    .help("Import Audio File")
                 Button { setupMode = .audio } label: { Label("Audio", systemImage: "waveform") }
                     .help("New Audio Recording")
                 Button { setupMode = .camera } label: { Label("Movie", systemImage: "video") }
@@ -58,6 +64,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .newAudioRecording)) { _ in setupMode = .audio }
         .onReceive(NotificationCenter.default.publisher(for: .newMovieRecording)) { _ in setupMode = .camera }
         .onReceive(NotificationCenter.default.publisher(for: .newScreenRecording)) { _ in setupMode = .screen }
+        .onReceive(NotificationCenter.default.publisher(for: .importAudioFile)) { _ in importAudioFile() }
         .onChange(of: library.recordings) { _, recordings in
             if selection == nil { selection = recordings.first?.id }
         }
@@ -78,6 +85,21 @@ struct ContentView: View {
         let folder = library.folderURL(for: recording.id)
         let file = recording.fileURL(for: recording.mediaFile, in: folder) ?? folder
         NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    private func importAudioFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Audio File"
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            if let imported = await coordinator.importAudioFile(from: url) {
+                selection = imported.id
+            }
+        }
     }
 }
 
@@ -139,14 +161,16 @@ private struct RecordingRow: View {
 
 private struct EmptyLibraryView: View {
     let start: (RecordingMode) -> Void
+    let importAudio: () -> Void
 
     var body: some View {
         ContentUnavailableView {
             Label("Ready to Record", systemImage: "record.circle")
         } description: {
-            Text("Capture audio, camera video, or your screen and transcribe it entirely on this Mac.")
+            Text("Capture audio, camera video, your screen, or import audio to transcribe entirely on this Mac.")
         } actions: {
             HStack {
+                Button("Import Audio") { importAudio() }
                 Button("Record Audio") { start(.audio) }
                 Button("Record Movie") { start(.camera) }
                 Button("Record Screen") { start(.screen) }
