@@ -6,3 +6,5 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 Models/
 dist/
+Resources/AppIcon-source.png
+Resources/AppIcon.iconset/
