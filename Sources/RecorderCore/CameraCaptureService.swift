@@ -85,6 +85,13 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         try? FileManager.default.removeItem(at: url)
         outputURL = url
         movieOutput.startRecording(to: url, recordingDelegate: self)
+        do {
+            try await waitUntilRecordingStarts()
+        } catch {
+            await stopSession()
+            self.outputURL = nil
+            throw error
+        }
         return CaptureArtifacts(primaryMediaURL: url)
     }
 
@@ -95,6 +102,12 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         // AVCaptureMovieFileOutput can finish asynchronously before the UI's
         // stop action observes `isRecording == false`. If the file is complete,
         // it is still a valid capture and should proceed to finalization.
+        if !movieOutput.isRecording {
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                if movieOutput.isRecording { break }
+            }
+        }
         if !movieOutput.isRecording {
             guard FileManager.default.fileExists(atPath: outputURL.path) else {
                 throw RecorderError.invalidState("Movie recording is not running.")
@@ -113,6 +126,14 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         levelLock.unlock()
         self.outputURL = nil
         return CaptureArtifacts(primaryMediaURL: try result.get())
+    }
+
+    private func waitUntilRecordingStarts() async throws {
+        for _ in 0..<40 {
+            if movieOutput.isRecording { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw RecorderError.captureFailed("The camera did not start recording.")
     }
 
     private func stopSession() async {
