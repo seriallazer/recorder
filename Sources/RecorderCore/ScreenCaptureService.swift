@@ -12,6 +12,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
     private var microphoneWriter: MicrophoneWriter?
     private var artifacts: CaptureArtifacts?
     private var writerStarted = false
+    private var writerSessionStartTime: CMTime?
     private let lock = NSLock()
 
     public override init() {
@@ -111,6 +112,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.audioInput = audioInput
         self.stream = stream
         self.writerStarted = false
+        self.writerSessionStartTime = nil
         let artifacts = CaptureArtifacts(primaryMediaURL: sourceURL, microphoneStemURL: micURL)
         self.artifacts = artifacts
         do {
@@ -144,7 +146,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
             artifacts.microphoneStemURL = try? await microphoneWriter.stop()
         }
 
-        let (writerStatus, writerError) = finishWriterInputs(writer)
+        let (writerStatus, writerError) = await finishWriterInputs(writer)
         guard writerStatus == .writing || writerStatus == .completed else {
             writer.cancelWriting()
             throw writerError ?? RecorderError.captureFailed("The screen recording writer stopped unexpectedly.")
@@ -160,6 +162,8 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.audioInput = nil
         self.microphoneWriter = nil
         self.artifacts = nil
+        self.writerStarted = false
+        self.writerSessionStartTime = nil
         return artifacts
     }
 
@@ -177,12 +181,17 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         return writerStarted
     }
 
-    private func finishWriterInputs(_ writer: AVAssetWriter) -> (AVAssetWriter.Status, Error?) {
-        lock.lock()
-        defer { lock.unlock() }
-        videoInput?.markAsFinished()
-        audioInput?.markAsFinished()
-        return (writer.status, writer.error)
+    private func finishWriterInputs(_ writer: AVAssetWriter) async -> (AVAssetWriter.Status, Error?) {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.lock.lock()
+                self.videoInput?.markAsFinished()
+                self.audioInput?.markAsFinished()
+                let result = (writer.status, writer.error)
+                self.lock.unlock()
+                continuation.resume(returning: result)
+            }
+        }
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -191,6 +200,15 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer) else { return }
+        if outputType == .screen {
+            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+                sampleBuffer,
+                createIfNecessary: false
+            ) as? [[SCStreamFrameInfo: Any]],
+            let attachment = attachments.first,
+            let statusRawValue = attachment[.status] as? Int,
+            SCFrameStatus(rawValue: statusRawValue) == .complete else { return }
+        }
         lock.lock()
         defer { lock.unlock() }
         guard let writer else { return }
@@ -198,14 +216,19 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         if !writerStarted, outputType == .screen {
             guard writer.startWriting() else { return }
             writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            writerSessionStartTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             writerStarted = true
         }
         guard writerStarted else { return }
         switch outputType {
         case .screen where videoInput?.isReadyForMoreMediaData == true:
-            videoInput?.append(sampleBuffer)
+            _ = videoInput?.append(sampleBuffer)
         case .audio where audioInput?.isReadyForMoreMediaData == true:
-            audioInput?.append(sampleBuffer)
+            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            if let writerSessionStartTime,
+               CMTimeCompare(presentationTime, writerSessionStartTime) >= 0 {
+                _ = audioInput?.append(sampleBuffer)
+            }
         default:
             break
         }
