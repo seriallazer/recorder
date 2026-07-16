@@ -7,11 +7,14 @@ struct RecordingDetailView: View {
     @EnvironmentObject private var library: RecordingLibrary
     @EnvironmentObject private var coordinator: RecordingCoordinator
     let recording: RecordingManifest
+    let onRequestDelete: (RecordingManifest) -> Void
 
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
     @State private var transcript: TranscriptDocument?
     @State private var player: AVPlayer?
+    @State private var metadata: RecordingMetadata?
+    @State private var showingInfo = false
     @State private var playbackRate: Float = 1
     @State private var exporting = false
 
@@ -30,6 +33,14 @@ struct RecordingDetailView: View {
         }
         .task(id: recording.updatedAt) {
             load()
+            let folder = library.folderURL(for: recording.id)
+            metadata = await RecordingMetadataReader.loadStorage(folder: folder)
+            guard !Task.isCancelled,
+                  let mediaURL = recording.fileURL(for: recording.mediaFile, in: folder),
+                  FileManager.default.fileExists(atPath: mediaURL.path) else { return }
+            let media = await RecordingMetadataReader.loadMedia(at: mediaURL)
+            guard !Task.isCancelled else { return }
+            metadata?.media = media
         }
     }
 
@@ -56,11 +67,33 @@ struct RecordingDetailView: View {
                     Label(transcript == nil ? "Transcribe" : "Transcribe Again", systemImage: "text.bubble")
                 }
             }
+            Button {
+                showingInfo.toggle()
+            } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Recording Info")
+            .popover(isPresented: $showingInfo, arrowEdge: .bottom) {
+                RecordingInfoPopover(
+                    recording: recording,
+                    metadata: metadata,
+                    folder: library.folderURL(for: recording.id),
+                    canDelete: canDelete,
+                    onRequestDelete: {
+                        showingInfo = false
+                        onRequestDelete(recording)
+                    }
+                )
+            }
             Menu {
                 Button("Reveal in Finder") { reveal() }
                 Button("Export Trimmed Copy…") { exportTrimmed() }
                 Divider()
-                Button("Delete Recording", role: .destructive) { try? library.delete(recording) }
+                Button("Delete Recording Folder…", role: .destructive) {
+                    onRequestDelete(recording)
+                }
+                .disabled(!canDelete)
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -214,6 +247,11 @@ struct RecordingDetailView: View {
         coordinator.modelPhase?.hasPrefix("Transcribing audio track") == true
     }
 
+    private var canDelete: Bool {
+        coordinator.activeRecording?.id != recording.id
+            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+    }
+
     private func revealTranscript() {
         NSWorkspace.shared.activateFileViewerSelecting([transcriptURL])
     }
@@ -237,6 +275,118 @@ struct RecordingDetailView: View {
                 coordinator.presentedError = error.localizedDescription
             }
         }
+    }
+}
+
+private struct RecordingInfoPopover: View {
+    let recording: RecordingManifest
+    let metadata: RecordingMetadata?
+    let folder: URL
+    let canDelete: Bool
+    let onRequestDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Recording Info", systemImage: "info.circle.fill")
+                .font(.headline)
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                infoRow("Size on disk", metadata.map { bytes($0.allocatedSize) } ?? "Calculating…")
+                if let metadata {
+                    infoRow("Contents", "\(metadata.fileCount) file\(metadata.fileCount == 1 ? "" : "s") • \(bytes(metadata.logicalSize))")
+                    if let fileSize = metadata.media?.fileSize {
+                        infoRow("Media file", bytes(fileSize))
+                    }
+                }
+                infoRow("Duration", TranscriptDocument.timestamp(metadata?.media?.duration ?? recording.duration))
+                if let dimensions {
+                    infoRow("Video", dimensions)
+                }
+                if let videoCodec = metadata?.media?.videoCodec {
+                    infoRow("Video codec", videoCodec)
+                }
+                if let audioDetails {
+                    infoRow("Audio", audioDetails)
+                }
+                infoRow("Audio captured", capturedAudio)
+                infoRow("Created", recording.createdAt.formatted(date: .abbreviated, time: .standard))
+                if let modified = metadata?.latestModificationDate {
+                    infoRow("Modified", modified.formatted(date: .abbreviated, time: .standard))
+                }
+                infoRow("Status", recording.state.rawValue.capitalized)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(folder.path)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+            }
+
+            HStack {
+                Button("Reveal") {
+                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                }
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(folder.path, forType: .string)
+                }
+                Spacer()
+                Button("Delete Folder…", role: .destructive, action: onRequestDelete)
+                    .disabled(!canDelete)
+            }
+        }
+        .padding(18)
+        .frame(width: 410)
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var dimensions: String? {
+        guard let width = metadata?.media?.width,
+              let height = metadata?.media?.height else { return nil }
+        if let frameRate = metadata?.media?.frameRate {
+            return "\(width) × \(height) • \(frameRate.formatted(.number.precision(.fractionLength(0...1)))) fps"
+        }
+        return "\(width) × \(height)"
+    }
+
+    private var audioDetails: String? {
+        guard let media = metadata?.media else { return nil }
+        let channels: String? = switch media.audioChannelCount {
+        case 1: "Mono"
+        case 2: "Stereo"
+        case let count?: "\(count) channels"
+        case nil: nil
+        }
+        let sampleRate = media.audioSampleRate.map {
+            "\(($0 / 1_000).formatted(.number.precision(.fractionLength(0...1)))) kHz"
+        }
+        let parts = [media.audioCodec, sampleRate, channels].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private var capturedAudio: String {
+        var sources: [String] = []
+        if recording.configuration.capturesSystemAudio { sources.append("System") }
+        if recording.configuration.capturesMicrophone { sources.append("Microphone") }
+        return sources.isEmpty ? "None" : sources.joined(separator: " + ")
+    }
+
+    private func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 }
 

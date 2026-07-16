@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject private var coordinator: RecordingCoordinator
     @State private var selection: UUID?
     @State private var setupMode: RecordingMode?
+    @State private var pendingDeletion: RecordingManifest?
 
     var selectedRecording: RecordingManifest? {
         library.recordings.first { $0.id == selection }
@@ -23,7 +24,10 @@ struct ContentView: View {
                             Button("Reveal in Finder") { reveal(recording) }
                             Button("Transcribe Again") { coordinator.transcribe(recording) }
                             Divider()
-                            Button("Delete", role: .destructive) { try? library.delete(recording) }
+                            Button("Delete Recording Folder…", role: .destructive) {
+                                pendingDeletion = recording
+                            }
+                            .disabled(!canDelete(recording))
                         }
                 }
             }
@@ -36,7 +40,10 @@ struct ContentView: View {
                     Divider()
                 }
                 if let selectedRecording {
-                    RecordingDetailView(recording: selectedRecording)
+                    RecordingDetailView(
+                        recording: selectedRecording,
+                        onRequestDelete: { pendingDeletion = $0 }
+                    )
                         .id(selectedRecording.id)
                 } else {
                     EmptyLibraryView(
@@ -66,7 +73,8 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .newScreenRecording)) { _ in setupMode = .screen }
         .onReceive(NotificationCenter.default.publisher(for: .importAudioFile)) { _ in importAudioFile() }
         .onChange(of: library.recordings) { _, recordings in
-            if selection == nil { selection = recordings.first?.id }
+            if let selection, recordings.contains(where: { $0.id == selection }) { return }
+            selection = recordings.first?.id
         }
         .onChange(of: coordinator.activeRecording?.id) { _, activeRecordingID in
             if let activeRecordingID {
@@ -84,12 +92,52 @@ struct ContentView: View {
         } message: {
             Text(coordinator.presentedError ?? "An unknown error occurred.")
         }
+        .confirmationDialog(
+            "Delete Recording Folder?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { recording in
+            Button("Delete Folder", role: .destructive) {
+                delete(recording)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeletion = nil
+            }
+        } message: { recording in
+            Text("This permanently deletes “\(recording.title)” and its entire folder, including the original media and transcript. This cannot be undone.")
+        }
     }
 
     private func reveal(_ recording: RecordingManifest) {
         let folder = library.folderURL(for: recording.id)
         let file = recording.fileURL(for: recording.mediaFile, in: folder) ?? folder
         NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    private func canDelete(_ recording: RecordingManifest) -> Bool {
+        coordinator.activeRecording?.id != recording.id
+            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+    }
+
+    private func delete(_ recording: RecordingManifest) {
+        guard canDelete(recording) else {
+            pendingDeletion = nil
+            coordinator.presentedError = "Wait for the recording or transcription to finish before deleting its folder."
+            return
+        }
+        do {
+            try library.delete(recording)
+            if selection == recording.id {
+                selection = library.recordings.first?.id
+            }
+        } catch {
+            coordinator.presentedError = "Could not delete the recording folder: \(error.localizedDescription)"
+        }
+        pendingDeletion = nil
     }
 
     private func importAudioFile() {
