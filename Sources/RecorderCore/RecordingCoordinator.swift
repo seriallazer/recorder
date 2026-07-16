@@ -148,6 +148,7 @@ public final class RecordingCoordinator: ObservableObject {
             // turn a successfully finalized recording into a failed one.
             try? await createThumbnailIfNeeded(for: &recording, folder: folder)
             try library.save(recording, in: folder)
+            removeWorkingDirectoryIfSafe(in: folder, finalized: finalized)
             clearActiveRecording()
             if recording.audioFile != nil {
                 transcribe(recording)
@@ -298,6 +299,21 @@ public final class RecordingCoordinator: ObservableObject {
         let url = folder.appendingPathComponent("thumbnail.jpg")
         try data.write(to: url, options: .atomic)
         recording.thumbnailFile = url.lastPathComponent
+    }
+
+    private func removeWorkingDirectoryIfSafe(in folder: URL, finalized: FinalizedMedia) {
+        let working = folder.appendingPathComponent("working", isDirectory: true).standardizedFileURL
+        let retainedFiles = [
+            finalized.mediaURL,
+            finalized.audioURL,
+            finalized.microphoneStemURL,
+            finalized.systemStemURL
+        ].compactMap { $0?.standardizedFileURL }
+        let workingPrefix = working.path.hasSuffix("/") ? working.path : working.path + "/"
+        guard retainedFiles.allSatisfy({ file in
+            file.path != working.path && !file.path.hasPrefix(workingPrefix)
+        }) else { return }
+        try? FileManager.default.removeItem(at: working)
     }
 
     private func mediaDuration(_ url: URL) async throws -> TimeInterval {

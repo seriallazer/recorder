@@ -53,7 +53,11 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
             AVVideoWidthKey: configuration.width,
             AVVideoHeightKey: configuration.height,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 8_000_000,
+                AVVideoAverageBitRateKey: VideoEncodingProfile.averageBitRate(
+                    width: configuration.width,
+                    height: configuration.height,
+                    framesPerSecond: configuration.framesPerSecond
+                ),
                 AVVideoExpectedSourceFrameRateKey: configuration.framesPerSecond,
                 AVVideoMaxKeyFrameIntervalKey: configuration.framesPerSecond * 2
             ]

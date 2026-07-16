@@ -25,6 +25,63 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertEqual(stopCallCount, 1)
         try? FileManager.default.removeItem(at: root)
     }
+
+    func testSuccessfulFinalizationRemovesWorkingDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(root.path, forKey: "RecorderLibraryPath")
+        let library = RecordingLibrary(defaults: defaults)
+        let capture = WorkingFileCapture()
+        let coordinator = RecordingCoordinator(
+            library: library,
+            finalizer: CopyingFinalizer(),
+            captureFactory: { _ in capture }
+        )
+
+        await coordinator.start(configuration: CaptureConfiguration(
+            mode: .screen,
+            capturesSystemAudio: false,
+            capturesMicrophone: false
+        ))
+        let recordingID = try XCTUnwrap(coordinator.activeRecording?.id)
+        let folder = library.folderURL(for: recordingID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("working").path))
+
+        await coordinator.stop()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("working").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("recording.mov").path))
+    }
+
+    func testFailedFinalizationPreservesWorkingDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(root.path, forKey: "RecorderLibraryPath")
+        let library = RecordingLibrary(defaults: defaults)
+        let capture = WorkingFileCapture()
+        let coordinator = RecordingCoordinator(
+            library: library,
+            finalizer: FailingFinalizer(),
+            captureFactory: { _ in capture }
+        )
+
+        await coordinator.start(configuration: CaptureConfiguration(
+            mode: .screen,
+            capturesSystemAudio: false,
+            capturesMicrophone: false
+        ))
+        let recordingID = try XCTUnwrap(coordinator.activeRecording?.id)
+        let working = library.folderURL(for: recordingID).appendingPathComponent("working")
+
+        await coordinator.stop()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: working.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: working.appendingPathComponent("source.mov").path))
+    }
 }
 
 private actor DelayedCapture: RecordingCapturing {
@@ -56,6 +113,65 @@ private struct PassthroughFinalizer: MediaFinalizing {
             systemStemURL: nil,
             duration: 1
         )
+    }
+
+    func exportTrimmed(
+        sourceURL: URL,
+        destinationURL: URL,
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) async throws {}
+}
+
+private actor WorkingFileCapture: RecordingCapturing {
+    private var sourceURL: URL?
+
+    func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        let url = workingDirectory.appendingPathComponent("source.mov")
+        try Data("recoverable source".utf8).write(to: url)
+        sourceURL = url
+        return CaptureArtifacts(primaryMediaURL: url)
+    }
+
+    func stop() async throws -> CaptureArtifacts {
+        guard let sourceURL else { throw RecorderError.invalidState("Missing test capture") }
+        return CaptureArtifacts(primaryMediaURL: sourceURL)
+    }
+}
+
+private struct CopyingFinalizer: MediaFinalizing {
+    func finalize(
+        artifacts: CaptureArtifacts,
+        configuration: CaptureConfiguration,
+        destinationDirectory: URL
+    ) async throws -> FinalizedMedia {
+        let destination = destinationDirectory.appendingPathComponent("recording.mov")
+        try FileManager.default.copyItem(at: artifacts.primaryMediaURL, to: destination)
+        return FinalizedMedia(
+            mediaURL: destination,
+            audioURL: destination,
+            microphoneStemURL: nil,
+            systemStemURL: nil,
+            duration: 1
+        )
+    }
+
+    func exportTrimmed(
+        sourceURL: URL,
+        destinationURL: URL,
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) async throws {}
+}
+
+private struct FailingFinalizer: MediaFinalizing {
+    func finalize(
+        artifacts: CaptureArtifacts,
+        configuration: CaptureConfiguration,
+        destinationDirectory: URL
+    ) async throws -> FinalizedMedia {
+        throw RecorderError.finalizationFailed("Test failure")
     }
 
     func exportTrimmed(
