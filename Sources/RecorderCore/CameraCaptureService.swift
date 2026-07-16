@@ -12,6 +12,8 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
     private var outputURL: URL?
     private var writerStarted = false
     private var writerSessionStartTime: CMTime?
+    private var videoSourceStartTime: CMTime?
+    private var audioSourceStartTime: CMTime?
     private var writerStartError: Error?
     private let stateLock = NSLock()
     private var latestLevel: Float = 0
@@ -84,6 +86,8 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.videoInput = videoInput
         self.audioInput = audioInput
         self.outputURL = url
+        self.videoSourceStartTime = nil
+        self.audioSourceStartTime = nil
         setWriterState(started: false, error: nil)
 
         do {
@@ -141,17 +145,30 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
               let writer else { return }
 
         if output === videoOutput {
+            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            // AVCapture can emit one warm-up frame at time zero before switching
+            // to the host-clock timeline. Appending that frame creates a gap as
+            // long as the Mac's uptime, which makes a short movie appear hours
+            // long and leaves playback parked on the warm-up frame.
+            guard CaptureTimeline.isUsableSourceStartTime(presentationTime) else { return }
             if !writerStarted {
                 guard writer.startWriting() else {
                     setWriterState(started: false, error: writer.error ?? RecorderError.captureFailed("Camera writer could not start."))
                     return
                 }
-                writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-                writerSessionStartTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                videoSourceStartTime = presentationTime
+                writerSessionStartTime = .zero
+                writer.startSession(atSourceTime: .zero)
                 setWriterState(started: true, error: nil)
             }
-            if videoInput?.isReadyForMoreMediaData == true,
-               videoInput?.append(sampleBuffer) == false {
+            if let videoSourceStartTime,
+               let normalizedBuffer = CaptureTimeline.retime(
+                   sampleBuffer,
+                   sourceStartTime: videoSourceStartTime,
+                   destinationStartTime: .zero
+               ),
+               videoInput?.isReadyForMoreMediaData == true,
+               videoInput?.append(normalizedBuffer) == false {
                 setWriterState(started: true, error: writer.error)
             }
         } else if output === audioOutput {
@@ -160,11 +177,19 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
             latestLevel = level
             stateLock.unlock()
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            if audioSourceStartTime == nil {
+                audioSourceStartTime = presentationTime
+            }
             if writerStarted,
                let writerSessionStartTime,
-               CMTimeCompare(presentationTime, writerSessionStartTime) >= 0,
+               let audioSourceStartTime,
+               let normalizedBuffer = CaptureTimeline.retime(
+                   sampleBuffer,
+                   sourceStartTime: audioSourceStartTime,
+                   destinationStartTime: writerSessionStartTime
+               ),
                audioInput?.isReadyForMoreMediaData == true,
-               audioInput?.append(sampleBuffer) == false {
+               audioInput?.append(normalizedBuffer) == false {
                 setWriterState(started: true, error: writer.error)
             }
         }
@@ -298,6 +323,88 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         audioInput = nil
         audioOutput = nil
         writerSessionStartTime = nil
+        videoSourceStartTime = nil
+        audioSourceStartTime = nil
         outputURL = nil
+    }
+}
+
+enum CaptureTimeline {
+    static func isUsableSourceStartTime(_ time: CMTime) -> Bool {
+        time.isValid && !time.isIndefinite && CMTimeCompare(time, .zero) > 0
+    }
+
+    static func normalizedTime(
+        _ sourceTime: CMTime,
+        sourceStartTime: CMTime,
+        destinationStartTime: CMTime
+    ) -> CMTime? {
+        guard sourceTime.isValid, !sourceTime.isIndefinite,
+              sourceStartTime.isValid, !sourceStartTime.isIndefinite,
+              destinationStartTime.isValid, !destinationStartTime.isIndefinite else {
+            return nil
+        }
+        let elapsed = CMTimeSubtract(sourceTime, sourceStartTime)
+        guard elapsed.isValid, !elapsed.isIndefinite,
+              CMTimeCompare(elapsed, .zero) >= 0 else {
+            return nil
+        }
+        return CMTimeAdd(destinationStartTime, elapsed)
+    }
+
+    static func retime(
+        _ sampleBuffer: CMSampleBuffer,
+        sourceStartTime: CMTime,
+        destinationStartTime: CMTime
+    ) -> CMSampleBuffer? {
+        let sourceTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard let destinationTime = normalizedTime(
+            sourceTime,
+            sourceStartTime: sourceStartTime,
+            destinationStartTime: destinationStartTime
+        ) else { return nil }
+
+        let offset = CMTimeSubtract(destinationTime, sourceTime)
+        var timingCount = 0
+        guard CMSampleBufferGetSampleTimingInfoArray(
+            sampleBuffer,
+            entryCount: 0,
+            arrayToFill: nil,
+            entriesNeededOut: &timingCount
+        ) == noErr, timingCount > 0 else { return nil }
+
+        var timing = Array(repeating: CMSampleTimingInfo(), count: timingCount)
+        guard CMSampleBufferGetSampleTimingInfoArray(
+            sampleBuffer,
+            entryCount: timingCount,
+            arrayToFill: &timing,
+            entriesNeededOut: &timingCount
+        ) == noErr else { return nil }
+
+        for index in timing.indices {
+            if timing[index].presentationTimeStamp.isValid {
+                timing[index].presentationTimeStamp = CMTimeAdd(
+                    timing[index].presentationTimeStamp,
+                    offset
+                )
+            }
+            if timing[index].decodeTimeStamp.isValid,
+               !timing[index].decodeTimeStamp.isIndefinite {
+                timing[index].decodeTimeStamp = CMTimeAdd(
+                    timing[index].decodeTimeStamp,
+                    offset
+                )
+            }
+        }
+
+        var retimedBuffer: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sampleBuffer,
+            sampleTimingEntryCount: timingCount,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &retimedBuffer
+        ) == noErr else { return nil }
+        return retimedBuffer
     }
 }
