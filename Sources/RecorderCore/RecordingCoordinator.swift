@@ -179,13 +179,12 @@ public final class RecordingCoordinator: ObservableObject {
             let (manifest, _) = try library.create(configuration: configuration)
             let fileExtension = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
             let title = sourceURL.deletingPathExtension().lastPathComponent
-            let destinationFolder = try library.renameFolder(for: manifest, identifier: title)
+            var imported = try library.rename(manifest, title: title, tag: nil)
+            let destinationFolder = library.folderURL(for: manifest.id)
             let mediaURL = destinationFolder.appendingPathComponent("recording").appendingPathExtension(fileExtension)
             try? FileManager.default.removeItem(at: mediaURL)
             try FileManager.default.copyItem(at: sourceURL, to: mediaURL)
 
-            var imported = manifest
-            imported.title = title
             imported.state = .ready
             imported.duration = try await mediaDuration(mediaURL)
             imported.trimStart = 0

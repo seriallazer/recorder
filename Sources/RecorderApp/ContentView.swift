@@ -171,6 +171,9 @@ private struct RecordingRow: View {
                 HStack(spacing: 5) {
                     Image(systemName: icon)
                     Text(recording.createdAt, format: .dateTime.month().day().hour().minute())
+                    if let tag = recording.tag {
+                        Text("• \(tag)")
+                    }
                     if recording.duration > 0 {
                         Text("• \(TranscriptDocument.timestamp(recording.duration))")
                     }

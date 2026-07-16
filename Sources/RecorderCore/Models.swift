@@ -105,6 +105,8 @@ public struct CaptureConfiguration: Codable, Hashable, Sendable {
 public struct RecordingManifest: Codable, Identifiable, Hashable, Sendable {
     public var id: UUID
     public var title: String
+    public var tag: String?
+    public var organizationPath: String?
     public var createdAt: Date
     public var updatedAt: Date
     public var mode: RecordingMode
@@ -132,6 +134,8 @@ public struct RecordingManifest: Codable, Identifiable, Hashable, Sendable {
     ) {
         self.id = id
         self.title = title
+        self.tag = nil
+        self.organizationPath = nil
         self.createdAt = createdAt
         self.updatedAt = createdAt
         self.mode = mode

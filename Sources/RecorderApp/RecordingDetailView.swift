@@ -14,6 +14,7 @@ struct RecordingDetailView: View {
     @State private var transcript: TranscriptDocument?
     @State private var player: AVPlayer?
     @State private var showingInfo = false
+    @State private var showingRename = false
     @State private var playbackRate: Float = 1
     @State private var exporting = false
 
@@ -33,13 +34,34 @@ struct RecordingDetailView: View {
         .task(id: recording.updatedAt) {
             load()
         }
+        .sheet(isPresented: $showingRename) {
+            RecordingIdentityEditor(recording: recording) { title, tag in
+                do {
+                    try library.rename(recording, title: title, tag: tag)
+                    return true
+                } catch {
+                    coordinator.presentedError = error.localizedDescription
+                    return false
+                }
+            }
+        }
     }
 
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(recording.title).font(.title2.bold())
-                Text("\(recording.mode.displayName) • \(recording.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                HStack(spacing: 7) {
+                    Text(recording.title).font(.title2.bold())
+                    Button {
+                        showingRename = true
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Rename and Tag")
+                    .disabled(!canRename)
+                }
+                Text(headerMetadata)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -69,7 +91,13 @@ struct RecordingDetailView: View {
                 RecordingInfoPopover(
                     recording: recording,
                     folder: library.folderURL(for: recording.id),
+                    organizedURL: recording.organizationPath.map { library.rootURL.appendingPathComponent($0) },
+                    canRename: canRename,
                     canDelete: canDelete,
+                    onRename: {
+                        showingInfo = false
+                        DispatchQueue.main.async { showingRename = true }
+                    },
                     onRequestDelete: {
                         showingInfo = false
                         onRequestDelete(recording)
@@ -78,6 +106,8 @@ struct RecordingDetailView: View {
             }
             Menu {
                 Button("Reveal in Finder") { reveal() }
+                Button("Rename & Tag…") { showingRename = true }
+                    .disabled(!canRename)
                 Button("Export Trimmed Copy…") { exportTrimmed() }
                 Divider()
                 Button("Delete Recording Folder…", role: .destructive) {
@@ -242,6 +272,20 @@ struct RecordingDetailView: View {
             && ![.recording, .finalizing, .transcribing].contains(recording.state)
     }
 
+    private var canRename: Bool {
+        coordinator.activeRecording?.id != recording.id
+            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+    }
+
+    private var headerMetadata: String {
+        var parts = [
+            recording.mode.displayName,
+            recording.createdAt.formatted(date: .abbreviated, time: .shortened)
+        ]
+        if let tag = recording.tag { parts.append(tag) }
+        return parts.joined(separator: " • ")
+    }
+
     private func revealTranscript() {
         NSWorkspace.shared.activateFileViewerSelecting([transcriptURL])
     }
@@ -271,7 +315,10 @@ struct RecordingDetailView: View {
 private struct RecordingInfoPopover: View {
     let recording: RecordingManifest
     let folder: URL
+    let organizedURL: URL?
+    let canRename: Bool
     let canDelete: Bool
+    let onRename: () -> Void
     let onRequestDelete: () -> Void
 
     @State private var metadata: RecordingMetadata?
@@ -300,6 +347,9 @@ private struct RecordingInfoPopover: View {
                     infoRow("Audio", audioDetails)
                 }
                 infoRow("Audio captured", capturedAudio)
+                if let tag = recording.tag {
+                    infoRow("Tag", tag)
+                }
                 infoRow("Created", recording.createdAt.formatted(date: .abbreviated, time: .standard))
                 if let modified = metadata?.latestModificationDate {
                     infoRow("Modified", modified.formatted(date: .abbreviated, time: .standard))
@@ -310,10 +360,10 @@ private struct RecordingInfoPopover: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Folder")
+                Text(organizedURL == nil ? "Storage folder" : "Organized path")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(folder.path)
+                Text((organizedURL ?? folder).path)
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                     .lineLimit(3)
@@ -321,12 +371,14 @@ private struct RecordingInfoPopover: View {
 
             HStack {
                 Button("Reveal") {
-                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                    NSWorkspace.shared.activateFileViewerSelecting([organizedURL ?? folder])
                 }
                 Button("Copy Path") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(folder.path, forType: .string)
+                    NSPasteboard.general.setString((organizedURL ?? folder).path, forType: .string)
                 }
+                Button("Rename & Tag…", action: onRename)
+                    .disabled(!canRename)
                 Spacer()
                 Button("Delete Folder…", role: .destructive, action: onRequestDelete)
                     .disabled(!canDelete)
@@ -387,6 +439,82 @@ private struct RecordingInfoPopover: View {
 
     private func bytes(_ count: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+    }
+}
+
+private struct RecordingIdentityEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let recording: RecordingManifest
+    let onSave: (String, String?) -> Bool
+
+    @State private var title: String
+    @State private var tag: String
+
+    init(recording: RecordingManifest, onSave: @escaping (String, String?) -> Bool) {
+        self.recording = recording
+        self.onSave = onSave
+        _title = State(initialValue: recording.title)
+        _tag = State(initialValue: recording.tag ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Rename Recording", systemImage: "pencil.and.list.clipboard")
+                .font(.title2.bold())
+
+            Form {
+                TextField("Title", text: $title)
+                TextField("Tag (optional)", text: $tag)
+            }
+            .formStyle(.grouped)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Organized path")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(pathPreview)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+            }
+
+            Text("The media folder stays in place. Recorder creates a Finder symlink at this organized path after active recording or transcription work has finished.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Save") {
+                    let normalizedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if onSave(title, normalizedTag.isEmpty ? nil : normalizedTag) {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
+    }
+
+    private var pathPreview: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmm"
+        let name = sanitized("\(formatter.string(from: recording.createdAt))_\(title)")
+        let normalizedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedTag.isEmpty
+            ? "Recorder / \(name)"
+            : "Recorder / \(sanitized(normalizedTag)) / \(name)"
+    }
+
+    private func sanitized(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_") )
+        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : Character("_") }
+        let collapsed = String(scalars)
+            .split(separator: "_", omittingEmptySubsequences: true)
+            .joined(separator: "_")
+        return collapsed.isEmpty ? "recording" : collapsed
     }
 }
 
