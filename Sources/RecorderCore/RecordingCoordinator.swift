@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import AVFoundation
-import AppKit
 
 @MainActor
 public final class RecordingCoordinator: ObservableObject {
@@ -295,15 +294,7 @@ public final class RecordingCoordinator: ObservableObject {
     private func createThumbnailIfNeeded(for recording: inout RecordingManifest, folder: URL) async throws {
         guard recording.mode != .audio,
               let media = recording.fileURL(for: recording.mediaFile ?? "recording.mov", in: folder) else { return }
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: media))
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 360)
-        let image = try generator.copyCGImage(
-            at: CMTime(seconds: min(1, recording.duration / 2), preferredTimescale: 600),
-            actualTime: nil
-        )
-        let bitmap = NSBitmapImageRep(cgImage: image)
-        guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return }
+        let data = try await ThumbnailGenerator.jpegData(for: media)
         let url = folder.appendingPathComponent("thumbnail.jpg")
         try data.write(to: url, options: .atomic)
         recording.thumbnailFile = url.lastPathComponent
