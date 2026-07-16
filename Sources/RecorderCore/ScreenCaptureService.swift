@@ -22,7 +22,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        guard PermissionManager.requestScreenCapture() else {
+        guard PermissionManager.hasScreenCaptureAccess else {
             throw RecorderError.permissionDenied("screen recording")
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

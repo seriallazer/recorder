@@ -14,12 +14,14 @@ public final class RecordingCoordinator: ObservableObject {
 
     public let library: RecordingLibrary
     private let finalizer: any MediaFinalizing
+    private let captureFactory: (RecordingMode) -> any RecordingCapturing
     private var activeCapture: (any RecordingCapturing)?
     private var activeFolder: URL?
     private var timer: Timer?
     private var startDate: Date?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var diskStopTriggered = false
+    private var stopInProgress = false
 
     private lazy var transcriber = LocalTranscriptionService { [weak self] phase, fraction in
         Task { @MainActor in
@@ -30,10 +32,18 @@ public final class RecordingCoordinator: ObservableObject {
 
     public init(
         library: RecordingLibrary,
-        finalizer: any MediaFinalizing = NativeMediaFinalizer()
+        finalizer: any MediaFinalizing = NativeMediaFinalizer(),
+        captureFactory: @escaping (RecordingMode) -> any RecordingCapturing = { mode in
+            switch mode {
+            case .audio: AudioCaptureService()
+            case .camera: CameraCaptureService()
+            case .screen: ScreenCaptureService()
+            }
+        }
     ) {
         self.library = library
         self.finalizer = finalizer
+        self.captureFactory = captureFactory
         library.recoverInterruptedRecordings()
     }
 
@@ -42,7 +52,7 @@ public final class RecordingCoordinator: ObservableObject {
     }
 
     public func start(configuration: CaptureConfiguration) async {
-        guard activeCapture == nil else {
+        guard activeCapture == nil, !stopInProgress else {
             presentedError = "Stop the current recording before starting another."
             return
         }
@@ -53,11 +63,7 @@ public final class RecordingCoordinator: ObservableObject {
             recording.errorMessage = nil
             try library.save(recording, in: folder)
 
-            let capture: any RecordingCapturing = switch configuration.mode {
-            case .audio: AudioCaptureService()
-            case .camera: CameraCaptureService()
-            case .screen: ScreenCaptureService()
-            }
+            let capture = captureFactory(configuration.mode)
             let working = folder.appendingPathComponent("working", isDirectory: true)
             do {
                 _ = try await capture.start(configuration: configuration, workingDirectory: working)
@@ -65,6 +71,9 @@ public final class RecordingCoordinator: ObservableObject {
                 // A capture can fail after opening a device or writer. Give it a
                 // chance to release those resources before showing the error.
                 try? await capture.stop()
+                recording.state = .failed
+                recording.errorMessage = error.localizedDescription
+                try? library.save(recording, in: folder)
                 throw error
             }
             activeCapture = capture
@@ -83,9 +92,13 @@ public final class RecordingCoordinator: ObservableObject {
     }
 
     public func stop() async {
+        guard !stopInProgress else { return }
         guard let capture = activeCapture,
               let folder = activeFolder,
-              var recording = activeRecording else { return }
+              var recording = activeRecording,
+              recording.state == .recording else { return }
+        stopInProgress = true
+        defer { stopInProgress = false }
         stopTimer()
         recording.state = .finalizing
         try? library.save(recording, in: folder)

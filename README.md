@@ -21,7 +21,9 @@ open dist/Recorder.app
 
 If the Mac is still on macOS 14.4, update macOS before installing Xcode. Apple requires macOS 14.5 or later for Xcode 16.x, which supplies the Swift 6 toolchain required by FluidAudio.
 
-On first use, macOS requests camera, microphone, and Screen Recording permissions as needed. If Screen Recording permission changes, quit and reopen Recorder.
+On first use, macOS requests camera and microphone access as needed. Screen recording access is requested only when you press **Request Screen Recording Access** in the screen-recording setup. If macOS asks you to quit the app after granting access, reopen `dist/Recorder.app`.
+
+Local builds use a stable designated requirement for `local.recorder.app`, so rebuilding the same app does not create a new Screen Recording identity. When upgrading from an older build that used a code-hash identity, remove the old Recorder entry from Privacy & Security → Screen & System Audio Recording once, reopen the newly built app, and grant access again. Later rebuilds retain that identity.
 
 ## Recording library
 

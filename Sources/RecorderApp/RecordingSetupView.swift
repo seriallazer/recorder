@@ -73,7 +73,12 @@ struct RecordingSetupView: View {
                         Label(screenSourceError, systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("Retry screen sources") { refreshScreenSources() }
+                        HStack {
+                            Button("Retry screen sources") { refreshScreenSources() }
+                            if !PermissionManager.hasScreenCaptureAccess {
+                                Button("Request Screen Recording Access") { requestScreenAccess() }
+                            }
+                        }
                     }
                     Toggle("Record system audio", isOn: $capturesSystemAudio)
                     Toggle("Record microphone", isOn: $capturesMicrophone)
@@ -162,7 +167,9 @@ struct RecordingSetupView: View {
         // ScreenCaptureService can use the first available display when the
         // picker could not enumerate sources yet. Window capture still needs a
         // concrete window ID.
-        case .screen: (screenTarget != .window || selectedSourceID != nil) && (capturesSystemAudio || capturesMicrophone)
+        case .screen: PermissionManager.hasScreenCaptureAccess
+            && (screenTarget != .window || selectedSourceID != nil)
+            && (capturesSystemAudio || capturesMicrophone)
         }
     }
 
@@ -171,10 +178,9 @@ struct RecordingSetupView: View {
         loadingSources = true
         screenSourceError = nil
         Task {
-            let hasPermission = PermissionManager.requestScreenCapture()
-            guard hasPermission else {
+            guard PermissionManager.hasScreenCaptureAccess else {
                 await MainActor.run {
-                    screenSourceError = "Screen Recording permission is required. Enable Recorder in System Settings → Privacy & Security → Screen Recording."
+                    screenSourceError = "Screen Recording permission is required. Use Request Access once, then reopen Recorder if macOS asks you to quit the app."
                     loadingSources = false
                 }
                 return
@@ -196,6 +202,15 @@ struct RecordingSetupView: View {
                     loadingSources = false
                 }
             }
+        }
+    }
+
+    private func requestScreenAccess() {
+        let granted = PermissionManager.requestScreenCaptureAccess()
+        if granted {
+            refreshScreenSources()
+        } else {
+            screenSourceError = "Enable Recorder in System Settings → Privacy & Security → Screen & System Audio Recording, then reopen the app."
         }
     }
 

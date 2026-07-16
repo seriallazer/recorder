@@ -42,6 +42,7 @@ cp "$ROOT/THIRD_PARTY_NOTICES.md" "$CONTENTS/Resources/THIRD_PARTY_NOTICES.md"
 cp "$ROOT/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
 codesign --force --deep --sign - \
+    --requirements '=designated => identifier "local.recorder.app"' \
     --entitlements "$ROOT/Resources/Recorder.entitlements" \
     "$APP"
 

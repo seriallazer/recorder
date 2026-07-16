@@ -64,7 +64,10 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                     self.session.addInput(cameraInput)
                     if configuration.capturesMicrophone, let microphone {
                         let microphoneInput = try AVCaptureDeviceInput(device: microphone)
-                        if self.session.canAddInput(microphoneInput) { self.session.addInput(microphoneInput) }
+                        guard self.session.canAddInput(microphoneInput) else {
+                            throw RecorderError.captureFailed("The selected microphone cannot be used with the camera.")
+                        }
+                        self.session.addInput(microphoneInput)
                     }
                     guard self.session.canAddOutput(self.movieOutput) else {
                         throw RecorderError.captureFailed("Movie output could not be configured.")
@@ -91,9 +94,7 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         let url = workingDirectory.appendingPathComponent("camera-source.mov")
         try? FileManager.default.removeItem(at: url)
         outputURL = url
-        recordingStateLock.lock()
-        completedRecordingResult = nil
-        recordingStateLock.unlock()
+        resetCompletedRecordingResult()
         movieOutput.startRecording(to: url, recordingDelegate: self)
         do {
             try await waitUntilRecordingStarts()
@@ -139,9 +140,7 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
             }
         }
         await stopSession()
-        levelLock.lock()
-        latestLevel = 0
-        levelLock.unlock()
+        resetAudioLevel()
         self.outputURL = nil
         return CaptureArtifacts(primaryMediaURL: try result.get())
     }
@@ -163,6 +162,18 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                 continuation.resume()
             }
         }
+    }
+
+    private func resetCompletedRecordingResult() {
+        recordingStateLock.lock()
+        completedRecordingResult = nil
+        recordingStateLock.unlock()
+    }
+
+    private func resetAudioLevel() {
+        levelLock.lock()
+        latestLevel = 0
+        levelLock.unlock()
     }
 
     public func fileOutput(

@@ -99,8 +99,12 @@ public enum PermissionManager {
         await requestMedia(.video)
     }
 
-    public static func requestScreenCapture() -> Bool {
-        CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+    public static var hasScreenCaptureAccess: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    public static func requestScreenCaptureAccess() -> Bool {
+        CGRequestScreenCaptureAccess()
     }
 
     private static func requestMedia(_ mediaType: AVMediaType) async -> Bool {
