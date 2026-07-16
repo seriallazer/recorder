@@ -1,5 +1,6 @@
 import Foundation
 import FluidAudio
+@preconcurrency import CoreML
 
 public actor LocalTranscriptionService: Transcribing, ModelManaging {
     public typealias ProgressCallback = @Sendable (_ phase: String, _ fraction: Double) -> Void
@@ -10,6 +11,11 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     public init(progress: ProgressCallback? = nil) {
         self.progress = progress
     }
+
+    // FluidAudio supports this path for its Parakeet encoder on Apple Silicon.
+    // Prefer it for the desktop app because the Neural Engine can reject an
+    // otherwise valid ML Program after sustained capture/AV workloads.
+    nonisolated static var preferredComputeUnits: MLComputeUnits { .cpuAndGPU }
 
     public var modelsAreAvailable: Bool {
         get async {
@@ -24,9 +30,13 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     public func prepareModels(loadDiarizer: Bool) async throws {
         if asrModels == nil {
             progress?("Downloading English transcription model", 0)
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = Self.preferredComputeUnits
             let models = try await AsrModels.downloadAndLoad(
+                configuration: configuration,
                 version: .v2,
                 encoderPrecision: .int8,
+                encoderComputeUnits: Self.preferredComputeUnits,
                 progressHandler: { [progress] update in
                     let cap = loadDiarizer ? 0.75 : 0.95
                     progress?("Preparing English transcription model", update.fractionCompleted * cap)
@@ -109,9 +119,15 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         // Keep ASR concurrency at one to minimize peak memory on 8 GB machines.
         let asr = AsrManager(config: ASRConfig(parallelChunkConcurrency: 1))
         try await asr.loadModels(asrModels)
-        var decoderState = try TdtDecoderState(decoderLayers: await asr.decoderLayerCount)
-        let asrResult = try await asr.transcribe(url, decoderState: &decoderState)
-        await asr.cleanup()
+        let asrResult: ASRResult
+        do {
+            var decoderState = try TdtDecoderState(decoderLayers: await asr.decoderLayerCount)
+            asrResult = try await asr.transcribe(url, decoderState: &decoderState)
+            await asr.cleanup()
+        } catch {
+            await asr.cleanup()
+            throw error
+        }
         try Task.checkCancellation()
 
         let words = words(from: asrResult)
