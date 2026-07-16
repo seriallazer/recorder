@@ -68,6 +68,11 @@ struct ContentView: View {
         .onChange(of: library.recordings) { _, recordings in
             if selection == nil { selection = recordings.first?.id }
         }
+        .onChange(of: coordinator.activeRecording?.id) { _, activeRecordingID in
+            if let activeRecordingID {
+                selection = activeRecordingID
+            }
+        }
         .task {
             if selection == nil { selection = library.recordings.first?.id }
         }
