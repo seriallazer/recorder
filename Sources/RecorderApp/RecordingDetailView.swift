@@ -13,7 +13,6 @@ struct RecordingDetailView: View {
     @State private var trimEnd: Double = 0
     @State private var transcript: TranscriptDocument?
     @State private var player: AVPlayer?
-    @State private var metadata: RecordingMetadata?
     @State private var showingInfo = false
     @State private var playbackRate: Float = 1
     @State private var exporting = false
@@ -33,14 +32,6 @@ struct RecordingDetailView: View {
         }
         .task(id: recording.updatedAt) {
             load()
-            let folder = library.folderURL(for: recording.id)
-            metadata = await RecordingMetadataReader.loadStorage(folder: folder)
-            guard !Task.isCancelled,
-                  let mediaURL = recording.fileURL(for: recording.mediaFile, in: folder),
-                  FileManager.default.fileExists(atPath: mediaURL.path) else { return }
-            let media = await RecordingMetadataReader.loadMedia(at: mediaURL)
-            guard !Task.isCancelled else { return }
-            metadata?.media = media
         }
     }
 
@@ -77,7 +68,6 @@ struct RecordingDetailView: View {
             .popover(isPresented: $showingInfo, arrowEdge: .bottom) {
                 RecordingInfoPopover(
                     recording: recording,
-                    metadata: metadata,
                     folder: library.folderURL(for: recording.id),
                     canDelete: canDelete,
                     onRequestDelete: {
@@ -280,10 +270,11 @@ struct RecordingDetailView: View {
 
 private struct RecordingInfoPopover: View {
     let recording: RecordingManifest
-    let metadata: RecordingMetadata?
     let folder: URL
     let canDelete: Bool
     let onRequestDelete: () -> Void
+
+    @State private var metadata: RecordingMetadata?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -343,6 +334,15 @@ private struct RecordingInfoPopover: View {
         }
         .padding(18)
         .frame(width: 410)
+        .task(id: recording.updatedAt) {
+            metadata = await RecordingMetadataReader.loadStorage(folder: folder)
+            guard !Task.isCancelled,
+                  let mediaURL = recording.fileURL(for: recording.mediaFile, in: folder),
+                  FileManager.default.fileExists(atPath: mediaURL.path) else { return }
+            let media = await RecordingMetadataReader.loadMedia(at: mediaURL)
+            guard !Task.isCancelled else { return }
+            metadata?.media = media
+        }
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
