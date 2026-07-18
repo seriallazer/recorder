@@ -7,9 +7,14 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
 
     private var asrModels: AsrModels?
     private let progress: ProgressCallback?
+    private let diarizer: any SpeakerDiarizing
 
-    public init(progress: ProgressCallback? = nil) {
+    public init(
+        progress: ProgressCallback? = nil,
+        diarizer: any SpeakerDiarizing = CrashSafeDiarizationService()
+    ) {
         self.progress = progress
+        self.diarizer = diarizer
     }
 
     // FluidAudio supports this path for its Parakeet encoder on Apple Silicon.
@@ -52,37 +57,27 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     }
 
     public func transcribe(recording: RecordingManifest, folder: URL) async throws -> TranscriptDocument {
+        try await transcribe(recording: recording, folder: folder, options: .stable)
+    }
+
+    public func transcribe(
+        recording: RecordingManifest,
+        folder: URL,
+        options: DiarizationOptions
+    ) async throws -> TranscriptDocument {
         try Task.checkCancellation()
 
-        let tracks: [(url: URL, source: TranscriptSource, fixedSpeaker: String?)]
-        if recording.mode == .audio {
-            guard let audio = recording.fileURL(for: recording.audioFile, in: folder) else {
-                throw RecorderError.missingMedia
-            }
-            let fixedSpeaker = recording.configuration.capturesMicrophone ? "You" : "Audio"
-            tracks = [(audio, .microphone, fixedSpeaker)]
-        } else if recording.mode == .screen {
-            var screenTracks: [(URL, TranscriptSource, String?)] = []
-            if let mic = recording.fileURL(for: recording.microphoneStemFile, in: folder) {
-                screenTracks.append((mic, .microphone, "You"))
-            }
-            if let system = recording.fileURL(for: recording.systemStemFile, in: folder) {
-                screenTracks.append((system, .system, "System Audio"))
-            }
-            if screenTracks.isEmpty, let audio = recording.fileURL(for: recording.audioFile, in: folder) {
-                screenTracks.append((audio, .mixed, "Audio"))
-            }
-            tracks = screenTracks
-        } else if let audio = recording.fileURL(for: recording.audioFile, in: folder) {
-            tracks = [(audio, .microphone, "You")]
-        } else {
-            throw RecorderError.missingMedia
-        }
-
+        let tracks = try TranscriptionTrackPlanner.plan(
+            recording: recording,
+            folder: folder,
+            options: options
+        )
         guard !tracks.isEmpty else { throw RecorderError.missingMedia }
         try await prepareModels(loadDiarizer: false)
 
         var allSegments: [TranscriptSegment] = []
+        var usedEnhancedDiarization = false
+        var fallbackMessages: [String] = []
         for (index, track) in tracks.enumerated() {
             try Task.checkCancellation()
             let baseProgress = 0.1 + (Double(index) / Double(tracks.count)) * 0.8
@@ -90,19 +85,43 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
             let result = try await transcribeTrack(
                 url: track.url,
                 source: track.source,
-                fixedSpeaker: track.fixedSpeaker
+                fixedSpeaker: track.fixedSpeaker,
+                fallbackSpeaker: track.fallbackSpeaker,
+                expectedSpeakerCount: track.expectedSpeakerCount,
+                speakerPrefix: track.speakerPrefix
             )
-            allSegments.append(contentsOf: result)
+            allSegments.append(contentsOf: result.segments)
+            usedEnhancedDiarization = usedEnhancedDiarization || result.usedEnhancedDiarization
+            if let fallbackMessage = result.fallbackMessage {
+                fallbackMessages.append(fallbackMessage)
+            }
             let completedProgress = 0.1 + (Double(index + 1) / Double(tracks.count)) * 0.8
             progress?("Finished audio track \(index + 1) of \(tracks.count)", completedProgress)
         }
 
         progress?("Finalizing transcript", 0.95)
         allSegments.sort { $0.startTime < $1.startTime }
+        if tracks.count > 1 {
+            allSegments = TranscriptAligner.markingCrossSourceOverlaps(in: allSegments)
+        }
         let speakerCount = Set(allSegments.map(\.speaker)).count
+        let attribution: SpeakerAttribution
+        if usedEnhancedDiarization {
+            attribution = .enhancedDiarization
+        } else if !fallbackMessages.isEmpty {
+            attribution = .stableFallback
+        } else if tracks.count > 1 {
+            attribution = .channelSeparated
+        } else {
+            attribution = .singleTrack
+        }
         return TranscriptDocument(
             recordingID: recording.id,
             speakerCount: speakerCount,
+            speakerAttribution: attribution,
+            attributionNote: fallbackMessages.isEmpty
+                ? nil
+                : "Enhanced diarization could not complete safely. The transcript was preserved with stable labels.",
             segments: allSegments
         )
     }
@@ -110,8 +129,11 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     private func transcribeTrack(
         url: URL,
         source: TranscriptSource,
-        fixedSpeaker: String?
-    ) async throws -> [TranscriptSegment] {
+        fixedSpeaker: String?,
+        fallbackSpeaker: String,
+        expectedSpeakerCount: Int?,
+        speakerPrefix: String
+    ) async throws -> TrackResult {
         guard let asrModels else {
             throw RecorderError.modelUnavailable("Models were not initialized.")
         }
@@ -139,12 +161,48 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
                 fixedSpeaker: fixedSpeaker
             )
             if aligned.isEmpty {
-                return fallbackSegments(from: asrResult, source: source, speaker: fixedSpeaker)
+                return TrackResult(segments: fallbackSegments(
+                    from: asrResult,
+                    source: source,
+                    speaker: fixedSpeaker
+                ))
             }
-            return aligned
+            return TrackResult(segments: aligned)
         }
 
-        return fallbackSegments(from: asrResult, source: source, speaker: "Audio")
+        do {
+            progress?("Separating speakers in a crash-safe helper", 0.88)
+            let intervals = try await diarizer.diarize(
+                url,
+                expectedSpeakerCount: expectedSpeakerCount
+            ).map { interval in
+                SpeakerInterval(
+                    speaker: speakerLabel(interval.speaker, prefix: speakerPrefix),
+                    startTime: interval.startTime,
+                    endTime: interval.endTime
+                )
+            }
+            let aligned = TranscriptAligner.align(words: words, speakers: intervals, source: source)
+            guard !aligned.isEmpty else {
+                throw RecorderError.transcriptionFailed("Speaker alignment returned no segments.")
+            }
+            return TrackResult(segments: aligned, usedEnhancedDiarization: true)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let stable = TranscriptAligner.align(
+                words: words,
+                speakers: [],
+                source: source,
+                fixedSpeaker: fallbackSpeaker
+            )
+            return TrackResult(
+                segments: stable.isEmpty
+                    ? fallbackSegments(from: asrResult, source: source, speaker: fallbackSpeaker)
+                    : stable,
+                fallbackMessage: error.localizedDescription
+            )
+        }
     }
 
     private func fallbackSegments(
@@ -183,5 +241,81 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
                 confidence: confidence
             )
         }
+    }
+
+    private func speakerLabel(_ rawValue: String, prefix: String) -> String {
+        let digits = rawValue.filter(\.isNumber)
+        return digits.isEmpty ? prefix : "\(prefix) \(digits)"
+    }
+}
+
+private struct TrackResult {
+    var segments: [TranscriptSegment]
+    var usedEnhancedDiarization = false
+    var fallbackMessage: String?
+}
+
+struct TranscriptionTrackPlan: Hashable, Sendable {
+    var url: URL
+    var source: TranscriptSource
+    var fixedSpeaker: String?
+    var fallbackSpeaker: String
+    var expectedSpeakerCount: Int?
+    var speakerPrefix: String
+}
+
+enum TranscriptionTrackPlanner {
+    static func plan(
+        recording: RecordingManifest,
+        folder: URL,
+        options: DiarizationOptions
+    ) throws -> [TranscriptionTrackPlan] {
+        let microphone = recording.fileURL(for: recording.microphoneStemFile, in: folder)
+        let system = recording.fileURL(for: recording.systemStemFile, in: folder)
+
+        if let microphone, let system, microphone.standardizedFileURL != system.standardizedFileURL {
+            let remoteSpeakerCount = max(1, options.expectedSpeakerCount - 1)
+            var tracks = [TranscriptionTrackPlan(
+                url: microphone,
+                source: .microphone,
+                fixedSpeaker: "You",
+                fallbackSpeaker: "You",
+                expectedSpeakerCount: nil,
+                speakerPrefix: "You"
+            )]
+            if options.isEnabled, remoteSpeakerCount > 1 {
+                tracks.append(TranscriptionTrackPlan(
+                    url: system,
+                    source: .system,
+                    fixedSpeaker: nil,
+                    fallbackSpeaker: "System Audio",
+                    expectedSpeakerCount: remoteSpeakerCount,
+                    speakerPrefix: "Interviewer"
+                ))
+            } else {
+                tracks.append(TranscriptionTrackPlan(
+                    url: system,
+                    source: .system,
+                    fixedSpeaker: options.isEnabled ? "Interviewer" : "System Audio",
+                    fallbackSpeaker: "System Audio",
+                    expectedSpeakerCount: nil,
+                    speakerPrefix: "Interviewer"
+                ))
+            }
+            return tracks
+        }
+
+        guard let audio = recording.fileURL(for: recording.audioFile, in: folder) else {
+            throw RecorderError.missingMedia
+        }
+        let stableSpeaker = recording.configuration.capturesMicrophone ? "You" : "Audio"
+        return [TranscriptionTrackPlan(
+            url: audio,
+            source: recording.configuration.capturesMicrophone ? .microphone : .mixed,
+            fixedSpeaker: options.isEnabled ? nil : stableSpeaker,
+            fallbackSpeaker: stableSpeaker,
+            expectedSpeakerCount: options.isEnabled ? options.expectedSpeakerCount : nil,
+            speakerPrefix: "Speaker"
+        )]
     }
 }

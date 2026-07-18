@@ -59,6 +59,18 @@ struct RecordingSetupView: View {
                         ForEach(microphones) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }
+                if mode == .audio {
+                    Toggle("Record meeting/system audio", isOn: $capturesSystemAudio)
+                    if capturesSystemAudio && !PermissionManager.hasScreenCaptureAccess {
+                        Label(
+                            "Screen & System Audio Recording permission is required for meeting audio.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        Button("Request Screen Recording Access") { requestScreenAccess() }
+                    }
+                }
                 if mode == .screen {
                     Picker("Capture", selection: $screenTarget) {
                         Text("Entire display").tag(ScreenTarget.display)
@@ -129,6 +141,7 @@ struct RecordingSetupView: View {
         .task {
             microphoneID = DeviceCatalog.preferredMicrophoneID(in: microphones)
             cameraID = DeviceCatalog.preferredCameraID(in: cameras)
+            if mode == .audio { capturesSystemAudio = false }
             if mode == .screen { refreshScreenSources() }
         }
         .onChange(of: screenTarget) { _, _ in selectedSourceID = filteredSources.first?.id }
@@ -145,7 +158,7 @@ struct RecordingSetupView: View {
             windowID: selected?.kind == .window ? selected?.id : nil,
             screenTarget: screenTarget,
             region: screenTarget == .region ? CaptureRegion(x: regionX, y: regionY, width: regionWidth, height: regionHeight) : nil,
-            capturesSystemAudio: mode == .screen && capturesSystemAudio,
+            capturesSystemAudio: (mode == .screen || mode == .audio) && capturesSystemAudio,
             capturesMicrophone: mode != .screen || capturesMicrophone,
             width: dimensions.0,
             height: dimensions.1,
@@ -163,6 +176,7 @@ struct RecordingSetupView: View {
     private var configurationIsValid: Bool {
         switch mode {
         case .audio: microphoneID != nil
+            && (!capturesSystemAudio || PermissionManager.hasScreenCaptureAccess)
         case .camera: cameraID != nil && (!capturesMicrophone || microphoneID != nil)
         // ScreenCaptureService can use the first available display when the
         // picker could not enumerate sources yet. Window capture still needs a
@@ -208,7 +222,7 @@ struct RecordingSetupView: View {
     private func requestScreenAccess() {
         let granted = PermissionManager.requestScreenCaptureAccess()
         if granted {
-            refreshScreenSources()
+            if mode == .screen { refreshScreenSources() }
         } else {
             screenSourceError = "Enable Recorder in System Settings → Privacy & Security → Screen & System Audio Recording, then reopen the app."
         }

@@ -1,6 +1,6 @@
 # Recorder
 
-A native macOS 14+ recorder with fully local English transcription and speaker diarization. It records microphone audio, camera video, or a display/window/region with optional system audio and microphone stems.
+A native macOS 14+ recorder with fully local English transcription and optional speaker diarization. It records microphone audio, audio-only meetings with separate system and microphone stems, camera video, or a display/window/region.
 
 ## Requirements
 
@@ -21,7 +21,7 @@ open dist/Recorder.app
 
 If the Mac is still on macOS 14.4, update macOS before installing Xcode. Apple requires macOS 14.5 or later for Xcode 16.x, which supplies the Swift 6 toolchain required by FluidAudio.
 
-On first use, macOS requests camera and microphone access as needed. Screen recording access is requested only when you press **Request Screen Recording Access** in the screen-recording setup. If macOS asks you to quit the app after granting access, reopen `dist/Recorder.app`.
+On first use, macOS requests camera and microphone access as needed. Screen & System Audio Recording access is needed for screen recording and for the optional **Record meeting/system audio** toggle in audio mode. If macOS asks you to quit the app after granting access, reopen `dist/Recorder.app`.
 
 Local builds use a stable designated requirement for `local.recorder.app`, so rebuilding the same app does not create a new Screen Recording identity. When upgrading from an older build that used a code-hash identity, remove the old Recorder entry from Privacy & Security → Screen & System Audio Recording once, reopen the newly built app, and grant access again. Later rebuilds retain that identity.
 
@@ -39,7 +39,9 @@ Recorder defaults to `~/Movies/Recorder`. The location can be changed in Setting
 
 ## Local models
 
-FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model and the offline diarization models. Later transcriptions use the local cache.
+FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model. Enabling enhanced diarization downloads the offline speaker models on first use; later runs use the local cache.
+
+Enhanced diarization is opt-in under Settings → Speaker Attribution. It runs in a separate `RecorderDiarizer` helper process with a one-item Core ML batch on memory-constrained Macs. A native model crash or ordinary inference error cannot terminate Recorder or discard the ASR result: transcription automatically falls back to stable single-track/channel labels and records that fallback in the transcript. For two-party calls, separate microphone and system-audio stems are preferred because they provide deterministic `You`/`Interviewer` attribution without model clustering.
 
 Third-party attribution and model-license details are recorded in `THIRD_PARTY_NOTICES.md` and copied into the app bundle.
 

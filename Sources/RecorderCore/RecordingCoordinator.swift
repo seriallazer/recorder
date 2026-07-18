@@ -14,6 +14,7 @@ public final class RecordingCoordinator: ObservableObject {
     public let library: RecordingLibrary
     private let finalizer: any MediaFinalizing
     private let captureFactory: (RecordingMode) -> any RecordingCapturing
+    private let transcriptionOptionsProvider: () -> DiarizationOptions
     private var activeCapture: (any RecordingCapturing)?
     private var activeFolder: URL?
     private var timer: Timer?
@@ -38,11 +39,15 @@ public final class RecordingCoordinator: ObservableObject {
             case .camera: CameraCaptureService()
             case .screen: ScreenCaptureService()
             }
+        },
+        transcriptionOptionsProvider: @escaping () -> DiarizationOptions = {
+            RecorderPreferences.diarizationOptions()
         }
     ) {
         self.library = library
         self.finalizer = finalizer
         self.captureFactory = captureFactory
+        self.transcriptionOptionsProvider = transcriptionOptionsProvider
         library.recoverInterruptedRecordings()
     }
 
@@ -203,9 +208,10 @@ public final class RecordingCoordinator: ObservableObject {
         }
     }
 
-    public func transcribe(_ recording: RecordingManifest) {
+    public func transcribe(_ recording: RecordingManifest, options: DiarizationOptions? = nil) {
         guard transcriptionTasks[recording.id] == nil else { return }
         let folder = library.folderURL(for: recording.id)
+        let selectedOptions = options ?? transcriptionOptionsProvider()
         transcriptionTasks[recording.id] = Task { [weak self] in
             guard let self else { return }
             var working = recording
@@ -213,7 +219,11 @@ public final class RecordingCoordinator: ObservableObject {
             working.errorMessage = nil
             try? self.library.save(working, in: folder)
             do {
-                let document = try await self.transcriber.transcribe(recording: working, folder: folder)
+                let document = try await self.transcriber.transcribe(
+                    recording: working,
+                    folder: folder,
+                    options: selectedOptions
+                )
                 let jsonURL = folder.appendingPathComponent("transcript.json")
                 let textURL = folder.appendingPathComponent("transcript.txt")
                 try JSONEncoder.recorder.encode(document).write(to: jsonURL, options: .atomic)

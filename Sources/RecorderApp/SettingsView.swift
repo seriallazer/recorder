@@ -5,6 +5,10 @@ import RecorderCore
 struct SettingsView: View {
     @EnvironmentObject private var library: RecordingLibrary
     @State private var error: String?
+    @AppStorage(RecorderPreferences.enhancedDiarizationKey)
+    private var enhancedDiarization = false
+    @AppStorage(RecorderPreferences.expectedSpeakerCountKey)
+    private var expectedSpeakerCount = 2
 
     var body: some View {
         Form {
@@ -22,10 +26,22 @@ struct SettingsView: View {
                 Text("Network access is used only when downloading the Core ML models for the first time.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Speaker Attribution") {
+                Toggle("Enhanced speaker diarization", isOn: $enhancedDiarization)
+                Stepper(
+                    "Expected speakers: \(expectedSpeakerCount)",
+                    value: $expectedSpeakerCount,
+                    in: 2...6
+                )
+                .disabled(!enhancedDiarization)
+                Text("When enabled, mixed audio is analyzed by an isolated local helper. If the model fails or crashes, Recorder stays open and automatically uses stable labels. Separate microphone and system-audio tracks remain preferred when available.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 560, height: 280)
+        .frame(width: 600, height: 470)
         .alert("Could Not Change Library", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(error ?? "") }

@@ -27,6 +27,24 @@ public struct SpeakerInterval: Hashable, Sendable {
 }
 
 public enum TranscriptAligner {
+    public static func markingCrossSourceOverlaps(
+        in segments: [TranscriptSegment]
+    ) -> [TranscriptSegment] {
+        var updated = segments
+        for index in updated.indices {
+            guard updated[index].source != .mixed else { continue }
+            let overlapsOtherSource = updated.indices.contains { candidate in
+                guard candidate != index,
+                      updated[candidate].source != .mixed,
+                      updated[candidate].source != updated[index].source else { return false }
+                return updated[candidate].endTime > updated[index].startTime
+                    && updated[candidate].startTime < updated[index].endTime
+            }
+            updated[index].isOverlapping = updated[index].isOverlapping || overlapsOtherSource
+        }
+        return updated
+    }
+
     public static func align(
         words: [ASRWord],
         speakers: [SpeakerInterval],

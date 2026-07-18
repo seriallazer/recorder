@@ -2,6 +2,29 @@ import XCTest
 @testable import RecorderCore
 
 final class TranscriptAlignerTests: XCTestCase {
+    func testSeparateChannelOverlapsAreMarkedOnBothSegments() {
+        let segments = [
+            TranscriptSegment(
+                startTime: 1,
+                endTime: 3,
+                speaker: "You",
+                text: "hello",
+                source: .microphone
+            ),
+            TranscriptSegment(
+                startTime: 2,
+                endTime: 4,
+                speaker: "Interviewer",
+                text: "hi",
+                source: .system
+            )
+        ]
+
+        let marked = TranscriptAligner.markingCrossSourceOverlaps(in: segments)
+
+        XCTAssertTrue(marked.allSatisfy(\.isOverlapping))
+    }
+
     func testTimestampUsesHoursMinutesAndSeconds() {
         XCTAssertEqual(TranscriptDocument.timestamp(3_661.9), "01:01:01")
     }

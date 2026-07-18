@@ -31,19 +31,27 @@ if [[ -z "$SWIFT_MAJOR" || "$SWIFT_MAJOR" -lt 6 ]]; then
 fi
 
 swift build -c release --product Recorder
+swift build -c release --product RecorderDiarizer
 
 APP="$ROOT/dist/Recorder.app"
 CONTENTS="$APP/Contents"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$ROOT/.build/release/Recorder" "$CONTENTS/MacOS/Recorder"
+cp "$ROOT/.build/release/RecorderDiarizer" "$CONTENTS/MacOS/RecorderDiarizer"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$CONTENTS/Resources/THIRD_PARTY_NOTICES.md"
 cp "$ROOT/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
-codesign --force --deep --sign - \
+codesign --force --sign - \
+    --identifier "local.recorder.diarizer" \
+    "$CONTENTS/MacOS/RecorderDiarizer"
+
+codesign --force --sign - \
     --requirements '=designated => identifier "local.recorder.app"' \
     --entitlements "$ROOT/Resources/Recorder.entitlements" \
     "$APP"
+
+codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "$APP"

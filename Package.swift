@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "Recorder", targets: ["RecorderApp"]),
+        .executable(name: "RecorderDiarizer", targets: ["RecorderDiarizer"]),
         .library(name: "RecorderCore", targets: ["RecorderCore"])
     ],
     dependencies: [
@@ -25,6 +26,13 @@ let package = Package(
         .executableTarget(
             name: "RecorderApp",
             dependencies: ["RecorderCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "RecorderDiarizer",
+            dependencies: [
+                .product(name: "FluidAudio", package: "FluidAudio")
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

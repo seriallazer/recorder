@@ -15,13 +15,54 @@ public struct NativeMediaFinalizer: MediaFinalizing {
         switch configuration.mode {
         case .audio:
             let mediaURL = destinationDirectory.appendingPathComponent("recording.m4a")
-            try replaceCopy(from: artifacts.primaryMediaURL, to: mediaURL)
+            let microphoneURL = destinationDirectory.appendingPathComponent("microphone.m4a")
+            let systemURL = destinationDirectory.appendingPathComponent("system.m4a")
+
+            let microphoneSource: URL? = if let microphone = artifacts.microphoneStemURL,
+               fileManager.fileExists(atPath: microphone.path),
+               try await hasAudioTrack(microphone) {
+                microphone
+            } else {
+                nil
+            }
+            let systemSource: URL? = if let system = artifacts.systemStemURL,
+               fileManager.fileExists(atPath: system.path),
+               try await hasAudioTrack(system) {
+                system
+            } else {
+                nil
+            }
+
+            let finalizedMicrophoneURL: URL?
+            let finalizedSystemURL: URL?
+            if let microphoneSource, let systemSource {
+                try replaceCopy(from: microphoneSource, to: microphoneURL)
+                try replaceCopy(from: systemSource, to: systemURL)
+                try await mixAudioTracks(
+                    [microphoneURL, systemURL],
+                    destinationURL: mediaURL
+                )
+                finalizedMicrophoneURL = microphoneURL
+                finalizedSystemURL = systemURL
+            } else if let microphoneSource {
+                try replaceCopy(from: microphoneSource, to: mediaURL)
+                finalizedMicrophoneURL = mediaURL
+                finalizedSystemURL = nil
+            } else if let systemSource {
+                try replaceCopy(from: systemSource, to: mediaURL)
+                finalizedMicrophoneURL = nil
+                finalizedSystemURL = mediaURL
+            } else {
+                try replaceCopy(from: artifacts.primaryMediaURL, to: mediaURL)
+                finalizedMicrophoneURL = configuration.capturesMicrophone ? mediaURL : nil
+                finalizedSystemURL = configuration.capturesSystemAudio ? mediaURL : nil
+            }
             let duration = try await mediaDuration(mediaURL)
             return FinalizedMedia(
                 mediaURL: mediaURL,
                 audioURL: mediaURL,
-                microphoneStemURL: mediaURL,
-                systemStemURL: nil,
+                microphoneStemURL: finalizedMicrophoneURL,
+                systemStemURL: finalizedSystemURL,
                 duration: duration
             )
 
@@ -168,6 +209,37 @@ public struct NativeMediaFinalizer: MediaFinalizing {
         exporter.outputURL = destinationURL
         exporter.outputFileType = .mov
         exporter.audioMix = audioMix
+        try await exporter.exportAsync()
+    }
+
+    private func mixAudioTracks(_ sourceURLs: [URL], destinationURL: URL) async throws {
+        let composition = AVMutableComposition()
+        for sourceURL in sourceURLs {
+            let asset = AVURLAsset(url: sourceURL)
+            guard let sourceTrack = try await asset.loadTracks(withMediaType: .audio).first,
+                  let targetTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                  ) else { continue }
+            let duration = try await asset.load(.duration)
+            try targetTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: duration),
+                of: sourceTrack,
+                at: .zero
+            )
+        }
+        guard !(try await composition.loadTracks(withMediaType: .audio)).isEmpty else {
+            throw RecorderError.missingMedia
+        }
+        try? FileManager.default.removeItem(at: destinationURL)
+        guard let exporter = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetAppleM4A
+        ) else {
+            throw RecorderError.finalizationFailed("The microphone and system audio could not be mixed.")
+        }
+        exporter.outputURL = destinationURL
+        exporter.outputFileType = .m4a
         try await exporter.exportAsync()
     }
 

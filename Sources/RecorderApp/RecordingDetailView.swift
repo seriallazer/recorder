@@ -108,6 +108,19 @@ struct RecordingDetailView: View {
                 Button("Reveal in Finder") { reveal() }
                 Button("Rename & Tag…") { showingRename = true }
                     .disabled(!canRename)
+                Divider()
+                Button("Transcribe with Stable Labels") {
+                    coordinator.transcribe(recording, options: .stable)
+                }
+                .disabled(recording.state == .transcribing)
+                Button("Transcribe with Enhanced Diarization") {
+                    let preferences = RecorderPreferences.diarizationOptions()
+                    coordinator.transcribe(recording, options: DiarizationOptions(
+                        isEnabled: true,
+                        expectedSpeakerCount: preferences.expectedSpeakerCount
+                    ))
+                }
+                .disabled(recording.state == .transcribing)
                 Button("Export Trimmed Copy…") { exportTrimmed() }
                 Divider()
                 Button("Delete Recording Folder…", role: .destructive) {
@@ -196,11 +209,20 @@ struct RecordingDetailView: View {
                 if let transcript {
                     HStack {
                         Label("\(transcript.speakerCount) speaker\(transcript.speakerCount == 1 ? "" : "s") detected", systemImage: "person.2")
+                        if let attribution = transcript.speakerAttribution {
+                            Text("• \(attribution.displayName)")
+                                .foregroundStyle(attribution == .stableFallback ? Color.orange : Color.secondary)
+                        }
                         Spacer()
                         Button("Reveal Text File") { revealTranscript() }
                         Button("Copy File Path") { copyTranscriptPath() }
                     }
                     Divider()
+                    if let note = transcript.attributionNote {
+                        Label(note, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     ForEach(transcript.segments) { segment in
                         if segment.endTime >= recording.trimStart && segment.startTime <= recording.effectiveTrimEnd {
                             Button {

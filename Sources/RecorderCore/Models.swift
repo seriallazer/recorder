@@ -41,6 +41,47 @@ public enum TranscriptSource: String, Codable, Sendable {
     case mixed
 }
 
+public enum SpeakerAttribution: String, Codable, Sendable {
+    case singleTrack
+    case channelSeparated
+    case enhancedDiarization
+    case stableFallback
+
+    public var displayName: String {
+        switch self {
+        case .singleTrack: "Single-speaker label"
+        case .channelSeparated: "Separate audio channels"
+        case .enhancedDiarization: "Enhanced model diarization"
+        case .stableFallback: "Stable fallback labels"
+        }
+    }
+}
+
+public struct DiarizationOptions: Hashable, Sendable {
+    public var isEnabled: Bool
+    public var expectedSpeakerCount: Int
+
+    public init(isEnabled: Bool = false, expectedSpeakerCount: Int = 2) {
+        self.isEnabled = isEnabled
+        self.expectedSpeakerCount = min(max(expectedSpeakerCount, 2), 6)
+    }
+
+    public static let stable = DiarizationOptions(isEnabled: false)
+}
+
+public enum RecorderPreferences {
+    public static let enhancedDiarizationKey = "EnhancedSpeakerDiarization"
+    public static let expectedSpeakerCountKey = "ExpectedSpeakerCount"
+
+    public static func diarizationOptions(defaults: UserDefaults = .standard) -> DiarizationOptions {
+        let count = defaults.integer(forKey: expectedSpeakerCountKey)
+        return DiarizationOptions(
+            isEnabled: defaults.bool(forKey: enhancedDiarizationKey),
+            expectedSpeakerCount: count == 0 ? 2 : count
+        )
+    }
+}
+
 public struct CaptureRegion: Codable, Hashable, Sendable {
     public var x: Double
     public var y: Double
@@ -189,17 +230,23 @@ public struct TranscriptDocument: Codable, Hashable, Sendable {
     public var recordingID: UUID
     public var generatedAt: Date
     public var speakerCount: Int
+    public var speakerAttribution: SpeakerAttribution?
+    public var attributionNote: String?
     public var segments: [TranscriptSegment]
 
     public init(
         recordingID: UUID,
         generatedAt: Date = Date(),
         speakerCount: Int,
+        speakerAttribution: SpeakerAttribution? = nil,
+        attributionNote: String? = nil,
         segments: [TranscriptSegment]
     ) {
         self.recordingID = recordingID
         self.generatedAt = generatedAt
         self.speakerCount = speakerCount
+        self.speakerAttribution = speakerAttribution
+        self.attributionNote = attributionNote
         self.segments = segments.sorted { $0.startTime < $1.startTime }
     }
 
@@ -211,7 +258,14 @@ public struct TranscriptDocument: Codable, Hashable, Sendable {
             let overlap = segment.isOverlapping ? " [overlapping speech]" : ""
             return "[\(Self.timestamp(shifted))] \(segment.speaker): \(segment.text)\(overlap)"
         }.joined(separator: "\n")
-        return "Speakers detected: \(speakerCount)\n\n\(body)\n"
+        var header = ["Speakers detected: \(speakerCount)"]
+        if let speakerAttribution {
+            header.append("Speaker attribution: \(speakerAttribution.displayName)")
+        }
+        if let attributionNote, !attributionNote.isEmpty {
+            header.append("Note: \(attributionNote)")
+        }
+        return "\(header.joined(separator: "\n"))\n\n\(body)\n"
     }
 
     public static func timestamp(_ seconds: TimeInterval) -> String {

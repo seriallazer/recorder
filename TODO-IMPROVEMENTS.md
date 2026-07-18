@@ -1,12 +1,11 @@
 # TODO Improvements
 
-## Good to have: enhanced screen-recording diarization
+## Good to have: speaker attribution editing and evaluation
 
-The current two-party baseline remains channel-based attribution: microphone audio and system audio are captured and transcribed separately, then merged chronologically. Keep the existing channel names unchanged.
+The two-party baseline is channel-based attribution: microphone audio and system audio are captured and transcribed separately, then merged chronologically. Enhanced offline diarization is available for mixed tracks and panels, with isolated-process crash containment and stable fallback.
 
-- Detect and mark overlapping speech when microphone and system-audio transcript segments intersect.
-- Optionally run offline multi-speaker diarization on the system-audio stem when multiple remote voices are suspected.
-- Fall back to the existing channel attribution whenever diarization is unavailable, unstable, or low confidence; diarization failure must never fail transcription.
 - Add transcript controls for manually renaming and merging detected speakers.
+- Add a small labeled evaluation set and report diarization error rate for one-on-one interviews, panels, speaker bleed, and overlap.
+- Explore voice enrollment so mixed recordings can identify `You` without relying on speaker-duration heuristics.
 
-Revisit after the core recording and transcription flows are stable. Validate with one-on-one interviews, panel interviews, overlapping speech, speaker bleed, and diarizer failure cases.
+Keep channel attribution as the fallback whenever diarization is unavailable, unstable, or low confidence.
