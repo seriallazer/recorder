@@ -109,6 +109,10 @@ struct RecordingDetailView: View {
                 Button("Rename & Tag…") { showingRename = true }
                     .disabled(!canRename)
                 Divider()
+                Button("Transcribe Automatically") {
+                    coordinator.transcribe(recording, options: .automatic)
+                }
+                .disabled(recording.state == .transcribing)
                 Button("Transcribe with Stable Labels") {
                     coordinator.transcribe(recording, options: .stable)
                 }
@@ -116,7 +120,7 @@ struct RecordingDetailView: View {
                 Button("Transcribe with Enhanced Diarization") {
                     let preferences = RecorderPreferences.diarizationOptions()
                     coordinator.transcribe(recording, options: DiarizationOptions(
-                        isEnabled: true,
+                        mode: .enhanced,
                         expectedSpeakerCount: preferences.expectedSpeakerCount
                     ))
                 }

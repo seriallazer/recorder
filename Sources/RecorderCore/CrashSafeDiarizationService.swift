@@ -13,9 +13,11 @@ public struct CrashSafeDiarizationService: SpeakerDiarizing, Sendable {
 
     public func diarize(_ audioURL: URL, expectedSpeakerCount: Int?) async throws -> [SpeakerInterval] {
         let helperURL = try resolveHelperURL()
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RecorderDiarization-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: outputURL) }
+        let workingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecorderDiarization-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        let outputURL = workingDirectory.appendingPathComponent("result.json")
+        defer { try? FileManager.default.removeItem(at: workingDirectory) }
 
         let processBox = ProcessBox()
         do {
@@ -28,6 +30,9 @@ public struct CrashSafeDiarizationService: SpeakerDiarizing, Sendable {
                         arguments.append(String(expectedSpeakerCount))
                     }
                     process.arguments = arguments
+                    var environment = ProcessInfo.processInfo.environment
+                    environment["TMPDIR"] = workingDirectory.path
+                    process.environment = environment
                     process.standardOutput = FileHandle.nullDevice
                     process.standardError = FileHandle.nullDevice
                     process.terminationHandler = { completed in

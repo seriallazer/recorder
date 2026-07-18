@@ -39,9 +39,11 @@ Recorder defaults to `~/Movies/Recorder`. The location can be changed in Setting
 
 ## Local models
 
-FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model. Enabling enhanced diarization downloads the offline speaker models on first use; later runs use the local cache.
+FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model. Auto or Enhanced mode downloads the offline speaker models on first use; later runs use the local cache.
 
-Enhanced diarization is opt-in under Settings → Speaker Attribution. It runs in a separate `RecorderDiarizer` helper process with a one-item Core ML batch on memory-constrained Macs. A native model crash or ordinary inference error cannot terminate Recorder or discard the ASR result: transcription automatically falls back to stable single-track/channel labels and records that fallback in the transcript. For two-party calls, separate microphone and system-audio stems are preferred because they provide deterministic `You`/`Interviewer` attribution without model clustering.
+Speaker attribution defaults to **Auto**. For long mixed recordings, Auto analyzes eight 20-second sections distributed across the timeline, ignores tiny outlier clusters, and selects stable labels for one meaningful voice or full enhanced diarization for multiple voices. Short recordings are analyzed in full. Separate microphone and system-audio stems remain preferred and Auto samples only the remote channel when deciding whether a panel needs additional separation.
+
+**Stable** and **Enhanced** remain available as global settings and per-recording overrides. Enhanced diarization runs in a separate `RecorderDiarizer` helper process with a one-item Core ML batch on memory-constrained Macs. A native model crash or ordinary inference error cannot terminate Recorder or discard the ASR result: transcription automatically falls back to stable single-track/channel labels and records the decision or fallback in the transcript.
 
 Third-party attribution and model-license details are recorded in `THIRD_PARTY_NOTICES.md` and copied into the app bundle.
 

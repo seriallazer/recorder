@@ -57,7 +57,7 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
     }
 
     public func transcribe(recording: RecordingManifest, folder: URL) async throws -> TranscriptDocument {
-        try await transcribe(recording: recording, folder: folder, options: .stable)
+        try await transcribe(recording: recording, folder: folder, options: .automatic)
     }
 
     public func transcribe(
@@ -78,6 +78,7 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         var allSegments: [TranscriptSegment] = []
         var usedEnhancedDiarization = false
         var fallbackMessages: [String] = []
+        var decisionMessages: [String] = []
         for (index, track) in tracks.enumerated() {
             try Task.checkCancellation()
             let baseProgress = 0.1 + (Double(index) / Double(tracks.count)) * 0.8
@@ -88,12 +89,17 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
                 fixedSpeaker: track.fixedSpeaker,
                 fallbackSpeaker: track.fallbackSpeaker,
                 expectedSpeakerCount: track.expectedSpeakerCount,
-                speakerPrefix: track.speakerPrefix
+                speakerPrefix: track.speakerPrefix,
+                automaticallySelectSpeakers: track.automaticallySelectSpeakers,
+                automaticSingleSpeaker: track.automaticSingleSpeaker
             )
             allSegments.append(contentsOf: result.segments)
             usedEnhancedDiarization = usedEnhancedDiarization || result.usedEnhancedDiarization
             if let fallbackMessage = result.fallbackMessage {
                 fallbackMessages.append(fallbackMessage)
+            }
+            if let decisionMessage = result.decisionMessage {
+                decisionMessages.append(decisionMessage)
             }
             let completedProgress = 0.1 + (Double(index + 1) / Double(tracks.count)) * 0.8
             progress?("Finished audio track \(index + 1) of \(tracks.count)", completedProgress)
@@ -115,13 +121,15 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         } else {
             attribution = .singleTrack
         }
+        var attributionNotes = decisionMessages
+        if !fallbackMessages.isEmpty {
+            attributionNotes.append("Enhanced diarization could not complete safely. The transcript was preserved with stable labels.")
+        }
         return TranscriptDocument(
             recordingID: recording.id,
             speakerCount: speakerCount,
             speakerAttribution: attribution,
-            attributionNote: fallbackMessages.isEmpty
-                ? nil
-                : "Enhanced diarization could not complete safely. The transcript was preserved with stable labels.",
+            attributionNote: attributionNotes.isEmpty ? nil : attributionNotes.joined(separator: " "),
             segments: allSegments
         )
     }
@@ -132,7 +140,9 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         fixedSpeaker: String?,
         fallbackSpeaker: String,
         expectedSpeakerCount: Int?,
-        speakerPrefix: String
+        speakerPrefix: String,
+        automaticallySelectSpeakers: Bool,
+        automaticSingleSpeaker: String
     ) async throws -> TrackResult {
         guard let asrModels else {
             throw RecorderError.modelUnavailable("Models were not initialized.")
@@ -171,10 +181,41 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         }
 
         do {
+            var resolvedSpeakerCount = expectedSpeakerCount
+            var automaticDecisionMessage: String?
+            if automaticallySelectSpeakers {
+                progress?("Sampling the recording to choose speaker mode", 0.84)
+                let sample = try await RepresentativeAudioSampler.makeSample(from: url)
+                defer { sample.removeIfNeeded() }
+                let sampleIntervals = try await diarizer.diarize(
+                    sample.url,
+                    expectedSpeakerCount: nil
+                )
+                let detectedCount = SpeakerModeClassifier.meaningfulSpeakerCount(
+                    in: sampleIntervals
+                )
+                if detectedCount <= 1 {
+                    let stable = TranscriptAligner.align(
+                        words: words,
+                        speakers: [],
+                        source: source,
+                        fixedSpeaker: automaticSingleSpeaker
+                    )
+                    return TrackResult(
+                        segments: stable.isEmpty
+                            ? fallbackSegments(from: asrResult, source: source, speaker: automaticSingleSpeaker)
+                            : stable,
+                        decisionMessage: "Auto sampled the recording and found one meaningful voice, so stable labels were used."
+                    )
+                }
+                resolvedSpeakerCount = detectedCount
+                automaticDecisionMessage = "Auto sampled the recording and found \(detectedCount) meaningful voices, so enhanced diarization was used."
+            }
+
             progress?("Separating speakers in a crash-safe helper", 0.88)
             let intervals = try await diarizer.diarize(
                 url,
-                expectedSpeakerCount: expectedSpeakerCount
+                expectedSpeakerCount: resolvedSpeakerCount
             ).map { interval in
                 SpeakerInterval(
                     speaker: speakerLabel(interval.speaker, prefix: speakerPrefix),
@@ -186,7 +227,11 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
             guard !aligned.isEmpty else {
                 throw RecorderError.transcriptionFailed("Speaker alignment returned no segments.")
             }
-            return TrackResult(segments: aligned, usedEnhancedDiarization: true)
+            return TrackResult(
+                segments: aligned,
+                usedEnhancedDiarization: true,
+                decisionMessage: automaticDecisionMessage
+            )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -253,6 +298,7 @@ private struct TrackResult {
     var segments: [TranscriptSegment]
     var usedEnhancedDiarization = false
     var fallbackMessage: String?
+    var decisionMessage: String?
 }
 
 struct TranscriptionTrackPlan: Hashable, Sendable {
@@ -262,6 +308,23 @@ struct TranscriptionTrackPlan: Hashable, Sendable {
     var fallbackSpeaker: String
     var expectedSpeakerCount: Int?
     var speakerPrefix: String
+    var automaticallySelectSpeakers: Bool = false
+    var automaticSingleSpeaker: String
+}
+
+enum SpeakerModeClassifier {
+    static func meaningfulSpeakerCount(in intervals: [SpeakerInterval]) -> Int {
+        guard !intervals.isEmpty else { return 1 }
+        let durations = Dictionary(grouping: intervals, by: \.speaker).mapValues { segments in
+            segments.reduce(0) { partial, segment in
+                partial + max(0, segment.endTime - segment.startTime)
+            }
+        }
+        let totalSpeech = durations.values.reduce(0, +)
+        let meaningfulDuration = max(8, totalSpeech * 0.07)
+        let meaningful = durations.values.filter { $0 >= meaningfulDuration }.count
+        return min(4, max(1, meaningful))
+    }
 }
 
 enum TranscriptionTrackPlanner {
@@ -281,25 +344,50 @@ enum TranscriptionTrackPlanner {
                 fixedSpeaker: "You",
                 fallbackSpeaker: "You",
                 expectedSpeakerCount: nil,
-                speakerPrefix: "You"
+                speakerPrefix: "You",
+                automaticSingleSpeaker: "You"
             )]
-            if options.isEnabled, remoteSpeakerCount > 1 {
+            switch options.mode {
+            case .automatic:
+                tracks.append(TranscriptionTrackPlan(
+                    url: system,
+                    source: .system,
+                    fixedSpeaker: nil,
+                    fallbackSpeaker: "System Audio",
+                    expectedSpeakerCount: nil,
+                    speakerPrefix: "Interviewer",
+                    automaticallySelectSpeakers: true,
+                    automaticSingleSpeaker: "Interviewer"
+                ))
+            case .enhanced where remoteSpeakerCount > 1:
                 tracks.append(TranscriptionTrackPlan(
                     url: system,
                     source: .system,
                     fixedSpeaker: nil,
                     fallbackSpeaker: "System Audio",
                     expectedSpeakerCount: remoteSpeakerCount,
-                    speakerPrefix: "Interviewer"
+                    speakerPrefix: "Interviewer",
+                    automaticSingleSpeaker: "Interviewer"
                 ))
-            } else {
+            case .enhanced:
                 tracks.append(TranscriptionTrackPlan(
                     url: system,
                     source: .system,
-                    fixedSpeaker: options.isEnabled ? "Interviewer" : "System Audio",
+                    fixedSpeaker: "Interviewer",
                     fallbackSpeaker: "System Audio",
                     expectedSpeakerCount: nil,
-                    speakerPrefix: "Interviewer"
+                    speakerPrefix: "Interviewer",
+                    automaticSingleSpeaker: "Interviewer"
+                ))
+            case .stable:
+                tracks.append(TranscriptionTrackPlan(
+                    url: system,
+                    source: .system,
+                    fixedSpeaker: "System Audio",
+                    fallbackSpeaker: "System Audio",
+                    expectedSpeakerCount: nil,
+                    speakerPrefix: "Interviewer",
+                    automaticSingleSpeaker: "System Audio"
                 ))
             }
             return tracks
@@ -309,13 +397,16 @@ enum TranscriptionTrackPlanner {
             throw RecorderError.missingMedia
         }
         let stableSpeaker = recording.configuration.capturesMicrophone ? "You" : "Audio"
+        let fixedSpeaker = options.mode == .stable ? stableSpeaker : nil
         return [TranscriptionTrackPlan(
             url: audio,
             source: recording.configuration.capturesMicrophone ? .microphone : .mixed,
-            fixedSpeaker: options.isEnabled ? nil : stableSpeaker,
+            fixedSpeaker: fixedSpeaker,
             fallbackSpeaker: stableSpeaker,
-            expectedSpeakerCount: options.isEnabled ? options.expectedSpeakerCount : nil,
-            speakerPrefix: "Speaker"
+            expectedSpeakerCount: options.mode == .enhanced ? options.expectedSpeakerCount : nil,
+            speakerPrefix: "Speaker",
+            automaticallySelectSpeakers: options.mode == .automatic,
+            automaticSingleSpeaker: stableSpeaker
         )]
     }
 }

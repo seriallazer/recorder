@@ -2,6 +2,14 @@ import XCTest
 @testable import RecorderCore
 
 final class DiarizationTests: XCTestCase {
+    func testDefaultPreferencesUseAutomaticMode() {
+        let suite = "RecorderDiarizationTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(RecorderPreferences.diarizationOptions(defaults: defaults).mode, .automatic)
+    }
+
     func testStableAudioPlanKeepsMicrophoneLabel() throws {
         let recording = makeRecording(mode: .audio, microphone: "recording.m4a")
         let tracks = try TranscriptionTrackPlanner.plan(
@@ -26,6 +34,20 @@ final class DiarizationTests: XCTestCase {
         XCTAssertNil(tracks[0].fixedSpeaker)
         XCTAssertEqual(tracks[0].fallbackSpeaker, "You")
         XCTAssertEqual(tracks[0].expectedSpeakerCount, 2)
+    }
+
+    func testAutomaticMixedAudioRequestsRepresentativeSampling() throws {
+        let recording = makeRecording(mode: .audio, microphone: "recording.m4a")
+        let tracks = try TranscriptionTrackPlanner.plan(
+            recording: recording,
+            folder: URL(fileURLWithPath: "/tmp/recording"),
+            options: .automatic
+        )
+
+        XCTAssertNil(tracks[0].fixedSpeaker)
+        XCTAssertNil(tracks[0].expectedSpeakerCount)
+        XCTAssertTrue(tracks[0].automaticallySelectSpeakers)
+        XCTAssertEqual(tracks[0].automaticSingleSpeaker, "You")
     }
 
     func testTwoPartySeparateChannelsAvoidModelAndUseExactAttribution() throws {
@@ -62,6 +84,51 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(tracks[1].speakerPrefix, "Interviewer")
     }
 
+    func testAutomaticSeparateChannelsSamplesOnlyRemoteTrack() throws {
+        let recording = makeRecording(
+            mode: .screen,
+            microphone: "microphone.m4a",
+            system: "system.m4a"
+        )
+        let tracks = try TranscriptionTrackPlanner.plan(
+            recording: recording,
+            folder: URL(fileURLWithPath: "/tmp/recording"),
+            options: .automatic
+        )
+
+        XCTAssertEqual(tracks[0].fixedSpeaker, "You")
+        XCTAssertFalse(tracks[0].automaticallySelectSpeakers)
+        XCTAssertNil(tracks[1].fixedSpeaker)
+        XCTAssertTrue(tracks[1].automaticallySelectSpeakers)
+        XCTAssertEqual(tracks[1].automaticSingleSpeaker, "Interviewer")
+    }
+
+    func testMeaningfulSpeakerClassifierIgnoresTinyOutlier() {
+        let intervals = [
+            SpeakerInterval(speaker: "S1", startTime: 0, endTime: 100),
+            SpeakerInterval(speaker: "S2", startTime: 100, endTime: 115),
+            SpeakerInterval(speaker: "S3", startTime: 115, endTime: 117)
+        ]
+
+        XCTAssertEqual(SpeakerModeClassifier.meaningfulSpeakerCount(in: intervals), 2)
+    }
+
+    func testRepresentativeRangesAreDistributedAcrossLongAudio() {
+        let ranges = RepresentativeAudioSampler.candidateRanges(for: 3_600)
+
+        XCTAssertEqual(ranges.count, 8)
+        XCTAssertTrue(ranges.allSatisfy { $0.duration == 20 })
+        XCTAssertLessThan(ranges[0].start, 200)
+        XCTAssertGreaterThan(ranges[7].start, 3_300)
+    }
+
+    func testShortAudioUsesWholeFileForAutomaticAnalysis() {
+        XCTAssertEqual(
+            RepresentativeAudioSampler.candidateRanges(for: 120),
+            [RepresentativeSampleRange(start: 0, duration: 120)]
+        )
+    }
+
     func testCrashSafeServiceTurnsHelperFailureIntoError() async throws {
         let service = CrashSafeDiarizationService(helperURL: URL(fileURLWithPath: "/usr/bin/false"))
         do {
@@ -77,16 +144,25 @@ final class DiarizationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let helper = directory.appendingPathComponent("crash.sh")
-        try Data("#!/bin/sh\nkill -BUS $$\n".utf8).write(to: helper)
+        let temporaryPathMarker = directory.appendingPathComponent("temporary-path.txt")
+        let script = """
+        #!/bin/sh
+        printf '%s' "$TMPDIR" > "$1"
+        touch "$TMPDIR/native-crash-leftover"
+        kill -BUS $$
+        """
+        try Data(script.utf8).write(to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
 
         let service = CrashSafeDiarizationService(helperURL: helper)
         do {
-            _ = try await service.diarize(URL(fileURLWithPath: "/tmp/audio.m4a"), expectedSpeakerCount: 2)
+            _ = try await service.diarize(temporaryPathMarker, expectedSpeakerCount: 2)
             XCTFail("Expected isolated helper signal")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("stable labels"))
         }
+        let helperTemporaryPath = try String(contentsOf: temporaryPathMarker, encoding: .utf8)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: helperTemporaryPath))
     }
 
     func testCrashSafeServiceDecodesSuccessfulHelperOutput() async throws {

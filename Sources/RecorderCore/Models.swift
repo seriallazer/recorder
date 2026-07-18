@@ -57,26 +57,50 @@ public enum SpeakerAttribution: String, Codable, Sendable {
     }
 }
 
+public enum DiarizationMode: String, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case stable
+    case enhanced
+
+    public var id: Self { self }
+
+    public var displayName: String {
+        switch self {
+        case .automatic: "Auto"
+        case .stable: "Stable"
+        case .enhanced: "Enhanced"
+        }
+    }
+}
+
 public struct DiarizationOptions: Hashable, Sendable {
-    public var isEnabled: Bool
+    public var mode: DiarizationMode
     public var expectedSpeakerCount: Int
 
-    public init(isEnabled: Bool = false, expectedSpeakerCount: Int = 2) {
-        self.isEnabled = isEnabled
+    public init(mode: DiarizationMode = .automatic, expectedSpeakerCount: Int = 2) {
+        self.mode = mode
         self.expectedSpeakerCount = min(max(expectedSpeakerCount, 2), 6)
     }
 
-    public static let stable = DiarizationOptions(isEnabled: false)
+    public init(isEnabled: Bool, expectedSpeakerCount: Int = 2) {
+        self.init(mode: isEnabled ? .enhanced : .stable, expectedSpeakerCount: expectedSpeakerCount)
+    }
+
+    public static let automatic = DiarizationOptions(mode: .automatic)
+    public static let stable = DiarizationOptions(mode: .stable)
 }
 
 public enum RecorderPreferences {
-    public static let enhancedDiarizationKey = "EnhancedSpeakerDiarization"
+    public static let diarizationModeKey = "SpeakerDiarizationMode"
     public static let expectedSpeakerCountKey = "ExpectedSpeakerCount"
 
     public static func diarizationOptions(defaults: UserDefaults = .standard) -> DiarizationOptions {
         let count = defaults.integer(forKey: expectedSpeakerCountKey)
+        let mode = defaults.string(forKey: diarizationModeKey)
+            .flatMap(DiarizationMode.init(rawValue:))
+            ?? .automatic
         return DiarizationOptions(
-            isEnabled: defaults.bool(forKey: enhancedDiarizationKey),
+            mode: mode,
             expectedSpeakerCount: count == 0 ? 2 : count
         )
     }

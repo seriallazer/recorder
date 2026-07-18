@@ -5,8 +5,8 @@ import RecorderCore
 struct SettingsView: View {
     @EnvironmentObject private var library: RecordingLibrary
     @State private var error: String?
-    @AppStorage(RecorderPreferences.enhancedDiarizationKey)
-    private var enhancedDiarization = false
+    @AppStorage(RecorderPreferences.diarizationModeKey)
+    private var diarizationMode = DiarizationMode.automatic.rawValue
     @AppStorage(RecorderPreferences.expectedSpeakerCountKey)
     private var expectedSpeakerCount = 2
 
@@ -27,14 +27,19 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Speaker Attribution") {
-                Toggle("Enhanced speaker diarization", isOn: $enhancedDiarization)
+                Picker("Transcription mode", selection: $diarizationMode) {
+                    ForEach(DiarizationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
                 Stepper(
                     "Expected speakers: \(expectedSpeakerCount)",
                     value: $expectedSpeakerCount,
                     in: 2...6
                 )
-                .disabled(!enhancedDiarization)
-                Text("When enabled, mixed audio is analyzed by an isolated local helper. If the model fails or crashes, Recorder stays open and automatically uses stable labels. Separate microphone and system-audio tracks remain preferred when available.")
+                .disabled(diarizationMode != DiarizationMode.enhanced.rawValue)
+                Text("Auto samples short sections across mixed audio, then chooses stable labels for one voice or enhanced diarization for multiple voices. Separate microphone and system-audio tracks are preferred. Model failures always fall back safely.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
