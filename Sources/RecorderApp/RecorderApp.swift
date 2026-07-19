@@ -12,11 +12,16 @@ extension Notification.Name {
 struct RecorderApplication: App {
     @StateObject private var library: RecordingLibrary
     @StateObject private var coordinator: RecordingCoordinator
+    @StateObject private var shortcutController: ShortcutRecordingController
 
     init() {
         let library = RecordingLibrary()
+        let coordinator = RecordingCoordinator(library: library)
         _library = StateObject(wrappedValue: library)
-        _coordinator = StateObject(wrappedValue: RecordingCoordinator(library: library))
+        _coordinator = StateObject(wrappedValue: coordinator)
+        _shortcutController = StateObject(
+            wrappedValue: ShortcutRecordingController(coordinator: coordinator)
+        )
     }
 
     var body: some Scene {
@@ -25,6 +30,7 @@ struct RecorderApplication: App {
                 .environmentObject(library)
                 .environmentObject(coordinator)
                 .frame(minWidth: 980, minHeight: 650)
+                .task { shortcutController.startListening() }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
