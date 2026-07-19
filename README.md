@@ -29,7 +29,7 @@ Local builds use a stable designated requirement for `local.recorder.app`, so re
 
 While Recorder is running, press `⌘⌥M` for audio, `⌘⌥N` for the entire screen, or `⌘⌥B` for movie/video from any app. Press the same shortcut again to stop, save, and start local transcription automatically. While one mode is recording, the other mode shortcuts are blocked until capture finishes; the active recording can also be stopped from Recorder's UI or menu-bar menu. The modifier combination and letter for every mode can be changed under **Settings → Global Recording Shortcut**, which prevents duplicate mappings before applying changes. Settings also provides system-audio and microphone options. Shortcut screen and movie recordings default to 1080p at 30 fps and use the preferred internal microphone/camera.
 
-Recorder adds a subtle menu-bar waveform: muted gray while idle, bold while recording, with a small `s` for screen or `v` for movie/video capture. The menu shows elapsed time and can stop, save, and transcribe the active capture.
+Recorder adds a subtle menu-bar waveform: muted gray with no suffix while idle, then bold with a small `a` for audio, `s` for screen, or `v` for movie/video capture. The menu shows elapsed time and can stop, save, and transcribe the active capture.
 
 Because these are system-wide shortcuts, Recorder reserves the three configured key combinations while it is open; other apps will not receive them during that time.
 

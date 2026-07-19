@@ -26,9 +26,10 @@ struct RecordingMenuBarLabel: View {
 
     private var suffix: String? {
         switch recording?.mode {
+        case .audio: "a"
         case .screen: "s"
         case .camera: "v"
-        case .audio, nil: nil
+        case nil: nil
         }
     }
 
