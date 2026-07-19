@@ -8,6 +8,7 @@ private let recorderHotKeySignature: OSType = 0x52454352 // "RECR"
 private struct GlobalHotKeyDefinition {
     let id: UInt32
     let keyCode: UInt32
+    let modifiers: UInt32
     let displayName: String
     let action: () -> Void
 }
@@ -58,7 +59,7 @@ final class GlobalHotKeyManager {
                 )
                 let status = RegisterEventHotKey(
                     definition.keyCode,
-                    UInt32(cmdKey),
+                    definition.modifiers,
                     hotKeyID,
                     GetApplicationEventTarget(),
                     0,
@@ -103,7 +104,7 @@ final class GlobalHotKeyManager {
         unregisterAll()
     }
 
-    private func unregisterAll() {
+    fileprivate func unregisterAll() {
         hotKeyRefs.forEach { UnregisterEventHotKey($0) }
         hotKeyRefs.removeAll()
         actions.removeAll()
@@ -114,34 +115,99 @@ final class GlobalHotKeyManager {
 
 @MainActor
 final class ShortcutRecordingController: ObservableObject {
+    @Published private(set) var registeredShortcuts = RecorderShortcutPreferences.shortcuts()
+
     private let coordinator: RecordingCoordinator
     private let hotKey = GlobalHotKeyManager()
     private var handlingShortcut = false
+    private var defaultsObserver: NSObjectProtocol?
 
     init(coordinator: RecordingCoordinator) {
         self.coordinator = coordinator
     }
 
     func startListening() {
-        guard !hotKey.isRegistered else { return }
+        if defaultsObserver == nil {
+            defaultsObserver = NotificationCenter.default.addObserver(
+                forName: UserDefaults.didChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.reloadShortcuts() }
+            }
+        }
+        reloadShortcuts()
+    }
+
+    deinit {
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+        }
+    }
+
+    private func reloadShortcuts() {
+        let requested = RecorderShortcutPreferences.shortcuts()
         do {
-            try hotKey.register([
-                shortcut(id: 1, keyCode: UInt32(kVK_ANSI_L), name: "⌘L", mode: .audio),
-                shortcut(id: 2, keyCode: UInt32(kVK_ANSI_N), name: "⌘N", mode: .screen),
-                shortcut(id: 3, keyCode: UInt32(kVK_ANSI_B), name: "⌘B", mode: .camera)
-            ])
+            try switchRegistration(to: requested)
         } catch {
+            if hotKey.isRegistered {
+                try? RecorderShortcutPreferences.save(shortcuts: registeredShortcuts)
+            }
             coordinator.presentedError = error.localizedDescription
         }
     }
 
+    func apply(shortcuts requested: RecordingShortcutSet) throws {
+        let previous = registeredShortcuts
+        try switchRegistration(to: requested)
+        do {
+            try RecorderShortcutPreferences.save(shortcuts: requested)
+        } catch {
+            try? switchRegistration(to: previous)
+            throw error
+        }
+    }
+
+    private func switchRegistration(to requested: RecordingShortcutSet) throws {
+        guard requested.hasUniqueShortcuts else {
+            throw ShortcutPreferenceError.duplicateShortcuts
+        }
+        guard requested != registeredShortcuts || !hotKey.isRegistered else { return }
+        let previous = hotKey.isRegistered ? registeredShortcuts : nil
+        hotKey.unregisterAll()
+        do {
+            try hotKey.register(definitions(for: requested))
+            registeredShortcuts = requested
+        } catch {
+            if let previous {
+                try? hotKey.register(definitions(for: previous))
+                registeredShortcuts = previous
+            }
+            throw error
+        }
+    }
+
+    private func definitions(
+        for shortcuts: RecordingShortcutSet
+    ) -> [GlobalHotKeyDefinition] {
+        [
+            shortcut(id: 1, configuration: shortcuts.audio, mode: .audio),
+            shortcut(id: 2, configuration: shortcuts.screen, mode: .screen),
+            shortcut(id: 3, configuration: shortcuts.camera, mode: .camera)
+        ]
+    }
+
     private func shortcut(
         id: UInt32,
-        keyCode: UInt32,
-        name: String,
+        configuration: RecordingKeyboardShortcut,
         mode: RecordingMode
     ) -> GlobalHotKeyDefinition {
-        GlobalHotKeyDefinition(id: id, keyCode: keyCode, displayName: name) { [weak self] in
+        GlobalHotKeyDefinition(
+            id: id,
+            keyCode: keyCode(for: configuration.key),
+            modifiers: carbonModifiers(for: configuration.modifiers),
+            displayName: configuration.displayText
+        ) { [weak self] in
             Task { @MainActor in
                 await self?.toggleRecording(mode: mode)
             }
@@ -185,10 +251,52 @@ final class ShortcutRecordingController: ObservableObject {
     }
 
     private func shortcutName(for mode: RecordingMode) -> String {
-        switch mode {
-        case .audio: "⌘L"
-        case .screen: "⌘N"
-        case .camera: "⌘B"
+        registeredShortcuts[mode].displayText
+    }
+
+    private func carbonModifiers(
+        for modifiers: RecordingShortcutModifiers
+    ) -> UInt32 {
+        switch modifiers {
+        case .command: UInt32(cmdKey)
+        case .commandOption: UInt32(cmdKey | optionKey)
+        case .commandShift: UInt32(cmdKey | shiftKey)
+        case .commandControl: UInt32(cmdKey | controlKey)
+        case .commandOptionShift: UInt32(cmdKey | optionKey | shiftKey)
+        case .commandOptionControl: UInt32(cmdKey | optionKey | controlKey)
+        case .controlOption: UInt32(controlKey | optionKey)
+        }
+    }
+
+    private func keyCode(for key: String) -> UInt32 {
+        switch key.uppercased() {
+        case "A": UInt32(kVK_ANSI_A)
+        case "B": UInt32(kVK_ANSI_B)
+        case "C": UInt32(kVK_ANSI_C)
+        case "D": UInt32(kVK_ANSI_D)
+        case "E": UInt32(kVK_ANSI_E)
+        case "F": UInt32(kVK_ANSI_F)
+        case "G": UInt32(kVK_ANSI_G)
+        case "H": UInt32(kVK_ANSI_H)
+        case "I": UInt32(kVK_ANSI_I)
+        case "J": UInt32(kVK_ANSI_J)
+        case "K": UInt32(kVK_ANSI_K)
+        case "L": UInt32(kVK_ANSI_L)
+        case "M": UInt32(kVK_ANSI_M)
+        case "N": UInt32(kVK_ANSI_N)
+        case "O": UInt32(kVK_ANSI_O)
+        case "P": UInt32(kVK_ANSI_P)
+        case "Q": UInt32(kVK_ANSI_Q)
+        case "R": UInt32(kVK_ANSI_R)
+        case "S": UInt32(kVK_ANSI_S)
+        case "T": UInt32(kVK_ANSI_T)
+        case "U": UInt32(kVK_ANSI_U)
+        case "V": UInt32(kVK_ANSI_V)
+        case "W": UInt32(kVK_ANSI_W)
+        case "X": UInt32(kVK_ANSI_X)
+        case "Y": UInt32(kVK_ANSI_Y)
+        case "Z": UInt32(kVK_ANSI_Z)
+        default: UInt32(kVK_ANSI_M)
         }
     }
 
@@ -209,14 +317,14 @@ final class ShortcutRecordingController: ObservableObject {
         }
         if configuration.mode == .camera {
             guard await PermissionManager.requestCamera() else {
-                coordinator.presentedError = "⌘B could not start: enable Recorder under System Settings → Privacy & Security → Camera."
+                coordinator.presentedError = "\(shortcutName(for: .camera)) could not start: enable Recorder under System Settings → Privacy & Security → Camera."
                 return false
             }
         }
         if configuration.mode == .screen,
            !configuration.capturesSystemAudio,
            !configuration.capturesMicrophone {
-            coordinator.presentedError = "⌘N could not start: enable system audio or microphone in Shortcut Recording settings."
+            coordinator.presentedError = "\(shortcutName(for: .screen)) could not start: enable system audio or microphone in Shortcut Recording settings."
             return false
         }
         return true

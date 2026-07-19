@@ -56,9 +56,13 @@ struct RecorderApplication: App {
         Settings {
             SettingsView()
                 .environmentObject(library)
+                .environmentObject(shortcutController)
         }
         MenuBarExtra {
-            RecordingMenuBarContent(coordinator: coordinator)
+            RecordingMenuBarContent(
+                coordinator: coordinator,
+                shortcutController: shortcutController
+            )
         } label: {
             RecordingMenuBarLabel(recording: coordinator.activeRecording)
         }

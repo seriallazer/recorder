@@ -31,6 +31,54 @@ final class ShortcutRecordingPreferencesTests: XCTestCase {
         XCTAssertFalse(configuration.capturesSystemAudio)
     }
 
+    func testDefaultShortcutMappingsUseCommandOptionMNB() {
+        let shortcuts = RecorderShortcutPreferences.shortcuts(defaults: defaults)
+
+        XCTAssertEqual(shortcuts.audio.displayText, "⌘⌥M")
+        XCTAssertEqual(shortcuts.screen.displayText, "⌘⌥N")
+        XCTAssertEqual(shortcuts.camera.displayText, "⌘⌥B")
+        XCTAssertTrue(shortcuts.hasUniqueShortcuts)
+    }
+
+    func testCustomShortcutMappingsRoundTripAtomically() throws {
+        let custom = RecordingShortcutSet(
+            audio: RecordingKeyboardShortcut(modifiers: .commandShift, key: "A"),
+            screen: RecordingKeyboardShortcut(modifiers: .controlOption, key: "S"),
+            camera: RecordingKeyboardShortcut(modifiers: .commandControl, key: "V")
+        )
+
+        try RecorderShortcutPreferences.save(shortcuts: custom, defaults: defaults)
+
+        XCTAssertEqual(
+            RecorderShortcutPreferences.shortcuts(defaults: defaults),
+            custom
+        )
+    }
+
+    func testDuplicateShortcutMappingsCannotBeSaved() {
+        let duplicate = RecordingKeyboardShortcut(
+            modifiers: .commandOption,
+            key: "M"
+        )
+        let shortcuts = RecordingShortcutSet(
+            audio: duplicate,
+            screen: duplicate,
+            camera: RecordingKeyboardShortcut(modifiers: .commandOption, key: "B")
+        )
+
+        XCTAssertFalse(shortcuts.hasUniqueShortcuts)
+        XCTAssertThrowsError(
+            try RecorderShortcutPreferences.save(
+                shortcuts: shortcuts,
+                defaults: defaults
+            )
+        )
+        XCTAssertEqual(
+            RecorderShortcutPreferences.shortcuts(defaults: defaults),
+            .defaults
+        )
+    }
+
     func testShortcutStartsOnlyWhenNoRecordingIsActive() {
         XCTAssertEqual(
             RecorderShortcutPreferences.action(

@@ -4,6 +4,7 @@ import RecorderCore
 
 struct SettingsView: View {
     @EnvironmentObject private var library: RecordingLibrary
+    @EnvironmentObject private var shortcutController: ShortcutRecordingController
     @State private var error: String?
     @AppStorage(RecorderPreferences.diarizationModeKey)
     private var diarizationMode = DiarizationMode.automatic.rawValue
@@ -15,6 +16,9 @@ struct SettingsView: View {
     private var shortcutScreenIncludesSystemAudio = true
     @AppStorage(RecorderShortcutPreferences.screenMicrophoneKey)
     private var shortcutScreenIncludesMicrophone = true
+    @State private var shortcutSet = RecorderShortcutPreferences.shortcuts()
+    @State private var shortcutSaveMessage: String?
+    @State private var shortcutSaveFailed = false
 
     var body: some View {
         Form {
@@ -33,18 +37,20 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Global Recording Shortcut") {
-                LabeledContent("Audio") {
-                    Text("⌘L").font(.system(.body, design: .monospaced).bold())
-                }
+                ShortcutEditorRow(
+                    title: "Audio",
+                    shortcut: shortcutBinding(for: .audio)
+                )
                 Toggle(
                     "Include meeting/system audio",
                     isOn: $shortcutAudioIncludesSystemAudio
                 )
 
                 Divider()
-                LabeledContent("Entire screen") {
-                    Text("⌘N").font(.system(.body, design: .monospaced).bold())
-                }
+                ShortcutEditorRow(
+                    title: "Entire screen",
+                    shortcut: shortcutBinding(for: .screen)
+                )
                 Toggle(
                     "Record system audio",
                     isOn: $shortcutScreenIncludesSystemAudio
@@ -55,8 +61,32 @@ struct SettingsView: View {
                 )
 
                 Divider()
-                LabeledContent("Movie/video") {
-                    Text("⌘B").font(.system(.body, design: .monospaced).bold())
+                ShortcutEditorRow(
+                    title: "Movie/video",
+                    shortcut: shortcutBinding(for: .camera)
+                )
+
+                HStack {
+                    Button("Apply Shortcuts") { saveShortcuts(shortcutSet) }
+                        .disabled(!shortcutSet.hasUniqueShortcuts)
+                    Button("Restore Defaults") {
+                        shortcutSet = .defaults
+                        saveShortcuts(.defaults)
+                    }
+                    if let shortcutSaveMessage {
+                        Text(shortcutSaveMessage)
+                            .font(.caption)
+                            .foregroundStyle(shortcutSaveFailed ? .red : .secondary)
+                    }
+                }
+
+                if !shortcutSet.hasUniqueShortcuts {
+                    Label(
+                        "Each recording mode must use a different shortcut.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 }
 
                 Text("While Recorder is running, use a shortcut from any app to start immediately. Press the same shortcut again to stop, save, and begin transcription automatically. Other recording modes remain blocked until capture finishes. These keys are reserved globally while Recorder is open.")
@@ -89,6 +119,29 @@ struct SettingsView: View {
         )) { Button("OK", role: .cancel) {} } message: { Text(error ?? "") }
     }
 
+    private func shortcutBinding(
+        for mode: RecordingMode
+    ) -> Binding<RecordingKeyboardShortcut> {
+        Binding(
+            get: { shortcutSet[mode] },
+            set: {
+                shortcutSet[mode] = $0
+                shortcutSaveMessage = nil
+            }
+        )
+    }
+
+    private func saveShortcuts(_ shortcuts: RecordingShortcutSet) {
+        do {
+            try shortcutController.apply(shortcuts: shortcuts)
+            shortcutSaveMessage = "Applied"
+            shortcutSaveFailed = false
+        } catch {
+            shortcutSaveMessage = error.localizedDescription
+            shortcutSaveFailed = true
+        }
+    }
+
     private func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -98,5 +151,36 @@ struct SettingsView: View {
         panel.directoryURL = library.rootURL
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try library.setRootURL(url) } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct ShortcutEditorRow: View {
+    let title: String
+    @Binding var shortcut: RecordingKeyboardShortcut
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                Picker("Modifiers", selection: $shortcut.modifiers) {
+                    ForEach(RecordingShortcutModifiers.allCases) { modifiers in
+                        Text(modifiers.displayName).tag(modifiers)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 205)
+
+                Picker("Key", selection: $shortcut.key) {
+                    ForEach(RecordingKeyboardShortcut.availableKeys, id: \.self) { key in
+                        Text(key).tag(key)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 62)
+
+                Text(shortcut.displayText)
+                    .font(.system(.body, design: .monospaced).bold())
+                    .frame(width: 55, alignment: .trailing)
+            }
+        }
     }
 }

@@ -40,6 +40,7 @@ struct RecordingMenuBarLabel: View {
 
 struct RecordingMenuBarContent: View {
     @ObservedObject var coordinator: RecordingCoordinator
+    @ObservedObject var shortcutController: ShortcutRecordingController
 
     var body: some View {
         if let recording = coordinator.activeRecording {
@@ -54,9 +55,9 @@ struct RecordingMenuBarContent: View {
         } else {
             Label("Recorder is idle", systemImage: "waveform")
             Divider()
-            Text("⌘L  Audio")
-            Text("⌘N  Entire screen")
-            Text("⌘B  Movie/video")
+            Text("\(shortcutController.registeredShortcuts.audio.displayText)  Audio")
+            Text("\(shortcutController.registeredShortcuts.screen.displayText)  Entire screen")
+            Text("\(shortcutController.registeredShortcuts.camera.displayText)  Movie/video")
         }
     }
 
