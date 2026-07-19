@@ -5,25 +5,30 @@ import RecorderCore
 
 private let recorderHotKeySignature: OSType = 0x52454352 // "RECR"
 
-private let recorderHotKeyHandler: EventHandlerUPP = { _, _, userData in
-    guard let userData else { return OSStatus(eventNotHandledErr) }
+private struct GlobalHotKeyDefinition {
+    let id: UInt32
+    let keyCode: UInt32
+    let displayName: String
+    let action: () -> Void
+}
+
+private let recorderHotKeyHandler: EventHandlerUPP = { _, event, userData in
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
     let manager = Unmanaged<GlobalHotKeyManager>
         .fromOpaque(userData)
         .takeUnretainedValue()
-    manager.invoke()
-    return noErr
+    return manager.invoke(event: event)
 }
 
 final class GlobalHotKeyManager {
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [EventHotKeyRef] = []
     private var eventHandlerRef: EventHandlerRef?
-    private var action: (() -> Void)?
+    private var actions: [UInt32: () -> Void] = [:]
 
-    var isRegistered: Bool { hotKeyRef != nil }
+    var isRegistered: Bool { !hotKeyRefs.isEmpty }
 
-    func registerCommandL(action: @escaping () -> Void) throws {
-        guard hotKeyRef == nil else { return }
-        self.action = action
+    fileprivate func register(_ definitions: [GlobalHotKeyDefinition]) throws {
+        guard !isRegistered else { return }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -40,37 +45,70 @@ final class GlobalHotKeyManager {
             &installedHandler
         )
         guard handlerStatus == noErr else {
-            self.action = nil
-            throw GlobalHotKeyError.registrationFailed(handlerStatus)
+            throw GlobalHotKeyError.registrationFailed("keyboard handler", handlerStatus)
         }
         eventHandlerRef = installedHandler
 
-        var registeredHotKey: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: recorderHotKeySignature, id: 1)
-        let hotKeyStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_L),
-            UInt32(cmdKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &registeredHotKey
-        )
-        guard hotKeyStatus == noErr else {
-            if let eventHandlerRef { RemoveEventHandler(eventHandlerRef) }
-            eventHandlerRef = nil
-            self.action = nil
-            throw GlobalHotKeyError.registrationFailed(hotKeyStatus)
+        do {
+            for definition in definitions {
+                var registeredHotKey: EventHotKeyRef?
+                let hotKeyID = EventHotKeyID(
+                    signature: recorderHotKeySignature,
+                    id: definition.id
+                )
+                let status = RegisterEventHotKey(
+                    definition.keyCode,
+                    UInt32(cmdKey),
+                    hotKeyID,
+                    GetApplicationEventTarget(),
+                    0,
+                    &registeredHotKey
+                )
+                guard status == noErr, let registeredHotKey else {
+                    throw GlobalHotKeyError.registrationFailed(
+                        definition.displayName,
+                        status
+                    )
+                }
+                hotKeyRefs.append(registeredHotKey)
+                actions[definition.id] = definition.action
+            }
+        } catch {
+            unregisterAll()
+            throw error
         }
-        hotKeyRef = registeredHotKey
     }
 
-    func invoke() {
-        action?()
+    func invoke(event: EventRef) -> OSStatus {
+        var hotKeyID = EventHotKeyID(signature: 0, id: 0)
+        let status = GetEventParameter(
+            event,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &hotKeyID
+        )
+        guard status == noErr,
+              hotKeyID.signature == recorderHotKeySignature,
+              let action = actions[hotKeyID.id] else {
+            return OSStatus(eventNotHandledErr)
+        }
+        action()
+        return noErr
     }
 
     deinit {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        unregisterAll()
+    }
+
+    private func unregisterAll() {
+        hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+        hotKeyRefs.removeAll()
+        actions.removeAll()
         if let eventHandlerRef { RemoveEventHandler(eventHandlerRef) }
+        eventHandlerRef = nil
     }
 }
 
@@ -87,17 +125,30 @@ final class ShortcutRecordingController: ObservableObject {
     func startListening() {
         guard !hotKey.isRegistered else { return }
         do {
-            try hotKey.registerCommandL { [weak self] in
-                Task { @MainActor in
-                    await self?.toggleRecording()
-                }
-            }
+            try hotKey.register([
+                shortcut(id: 1, keyCode: UInt32(kVK_ANSI_L), name: "⌘L", mode: .audio),
+                shortcut(id: 2, keyCode: UInt32(kVK_ANSI_N), name: "⌘N", mode: .screen),
+                shortcut(id: 3, keyCode: UInt32(kVK_ANSI_B), name: "⌘B", mode: .camera)
+            ])
         } catch {
             coordinator.presentedError = error.localizedDescription
         }
     }
 
-    private func toggleRecording() async {
+    private func shortcut(
+        id: UInt32,
+        keyCode: UInt32,
+        name: String,
+        mode: RecordingMode
+    ) -> GlobalHotKeyDefinition {
+        GlobalHotKeyDefinition(id: id, keyCode: keyCode, displayName: name) { [weak self] in
+            Task { @MainActor in
+                await self?.toggleRecording(mode: mode)
+            }
+        }
+    }
+
+    private func toggleRecording(mode: RecordingMode) async {
         guard !handlingShortcut else { return }
         handlingShortcut = true
         defer { handlingShortcut = false }
@@ -107,36 +158,53 @@ final class ShortcutRecordingController: ObservableObject {
             return
         }
 
-        let configuration = RecorderShortcutPreferences.configuration()
-        if configuration.mode == .screen {
-            guard PermissionManager.hasScreenCaptureAccess else {
-                coordinator.presentedError = "⌘L could not start: enable Recorder under System Settings → Privacy & Security → Screen & System Audio Recording."
-                return
-            }
-            guard configuration.capturesSystemAudio || configuration.capturesMicrophone else {
-                coordinator.presentedError = "⌘L could not start: enable system audio or microphone in Shortcut Recording settings."
-                return
-            }
-        } else if configuration.capturesSystemAudio,
-                  !PermissionManager.hasScreenCaptureAccess {
-            coordinator.presentedError = "⌘L could not start meeting audio: enable Screen & System Audio Recording permission, or disable system audio in Shortcut Recording settings."
-            return
-        }
+        let configuration = RecorderShortcutPreferences.configuration(for: mode)
+        guard await permissionsAreAvailable(for: configuration) else { return }
         await coordinator.start(configuration: configuration)
+    }
+
+    private func permissionsAreAvailable(
+        for configuration: CaptureConfiguration
+    ) async -> Bool {
+        if configuration.mode == .screen || configuration.capturesSystemAudio {
+            guard PermissionManager.hasScreenCaptureAccess else {
+                coordinator.presentedError = "The shortcut could not start: enable Recorder under System Settings → Privacy & Security → Screen & System Audio Recording."
+                return false
+            }
+        }
+        if configuration.capturesMicrophone {
+            guard await PermissionManager.requestMicrophone() else {
+                coordinator.presentedError = "The shortcut could not start: enable Recorder under System Settings → Privacy & Security → Microphone."
+                return false
+            }
+        }
+        if configuration.mode == .camera {
+            guard await PermissionManager.requestCamera() else {
+                coordinator.presentedError = "⌘B could not start: enable Recorder under System Settings → Privacy & Security → Camera."
+                return false
+            }
+        }
+        if configuration.mode == .screen,
+           !configuration.capturesSystemAudio,
+           !configuration.capturesMicrophone {
+            coordinator.presentedError = "⌘N could not start: enable system audio or microphone in Shortcut Recording settings."
+            return false
+        }
+        return true
     }
 }
 
 private enum GlobalHotKeyError: LocalizedError {
-    case registrationFailed(OSStatus)
+    case registrationFailed(String, OSStatus)
 
     var errorDescription: String? {
         switch self {
-        case .registrationFailed(let status):
+        case .registrationFailed(let shortcut, let status):
             let systemMessage = NSError(
                 domain: NSOSStatusErrorDomain,
                 code: Int(status)
             ).localizedDescription
-            return "Recorder could not register the global ⌘L shortcut (\(systemMessage)). Another app may already own it."
+            return "Recorder could not register the global \(shortcut) shortcut (\(systemMessage)). Another app may already own it."
         }
     }
 }

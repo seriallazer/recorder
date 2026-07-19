@@ -20,11 +20,11 @@ final class ShortcutRecordingPreferencesTests: XCTestCase {
 
     func testDefaultsToMicrophoneOnlyAudioUsingPreferredInternalMicrophone() {
         let configuration = RecorderShortcutPreferences.configuration(
+            for: .audio,
             defaults: defaults,
             microphones: microphones
         )
 
-        XCTAssertEqual(RecorderShortcutPreferences.mode(defaults: defaults), .audio)
         XCTAssertEqual(configuration.mode, .audio)
         XCTAssertEqual(configuration.microphoneID, "internal")
         XCTAssertTrue(configuration.capturesMicrophone)
@@ -32,12 +32,8 @@ final class ShortcutRecordingPreferencesTests: XCTestCase {
     }
 
     func testScreenDefaultsCaptureEntireDisplayWithSystemAndMicrophoneAudio() {
-        defaults.set(
-            ShortcutRecordingMode.screen.rawValue,
-            forKey: RecorderShortcutPreferences.modeKey
-        )
-
         let configuration = RecorderShortcutPreferences.configuration(
+            for: .screen,
             defaults: defaults,
             microphones: microphones
         )
@@ -56,23 +52,42 @@ final class ShortcutRecordingPreferencesTests: XCTestCase {
     func testPersistedAudioOptionsAreHonored() {
         defaults.set(true, forKey: RecorderShortcutPreferences.audioSystemAudioKey)
         var configuration = RecorderShortcutPreferences.configuration(
+            for: .audio,
             defaults: defaults,
             microphones: microphones
         )
         XCTAssertTrue(configuration.capturesSystemAudio)
 
-        defaults.set(
-            ShortcutRecordingMode.screen.rawValue,
-            forKey: RecorderShortcutPreferences.modeKey
-        )
         defaults.set(false, forKey: RecorderShortcutPreferences.screenSystemAudioKey)
         defaults.set(false, forKey: RecorderShortcutPreferences.screenMicrophoneKey)
         configuration = RecorderShortcutPreferences.configuration(
+            for: .screen,
             defaults: defaults,
             microphones: microphones
         )
         XCTAssertFalse(configuration.capturesSystemAudio)
         XCTAssertFalse(configuration.capturesMicrophone)
+    }
+
+    func testMovieUsesPreferredInternalCameraAndMicrophone() {
+        let configuration = RecorderShortcutPreferences.configuration(
+            for: .camera,
+            defaults: defaults,
+            microphones: microphones,
+            cameras: [
+                MediaDevice(id: "external-camera", name: "USB Camera"),
+                MediaDevice(id: "internal-camera", name: "FaceTime HD Camera")
+            ]
+        )
+
+        XCTAssertEqual(configuration.mode, .camera)
+        XCTAssertEqual(configuration.cameraID, "internal-camera")
+        XCTAssertEqual(configuration.microphoneID, "internal")
+        XCTAssertTrue(configuration.capturesMicrophone)
+        XCTAssertFalse(configuration.capturesSystemAudio)
+        XCTAssertEqual(configuration.width, 1_920)
+        XCTAssertEqual(configuration.height, 1_080)
+        XCTAssertEqual(configuration.framesPerSecond, 30)
     }
 
     private var microphones: [MediaDevice] {

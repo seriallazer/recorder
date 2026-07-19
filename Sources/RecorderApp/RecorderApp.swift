@@ -57,5 +57,11 @@ struct RecorderApplication: App {
             SettingsView()
                 .environmentObject(library)
         }
+        MenuBarExtra {
+            RecordingMenuBarContent(coordinator: coordinator)
+        } label: {
+            RecordingMenuBarLabel(recording: coordinator.activeRecording)
+        }
+        .menuBarExtraStyle(.menu)
     }
 }

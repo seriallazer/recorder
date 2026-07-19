@@ -1,38 +1,18 @@
 import Foundation
 
-public enum ShortcutRecordingMode: String, CaseIterable, Identifiable, Sendable {
-    case audio
-    case screen
-
-    public var id: Self { self }
-
-    public var displayName: String {
-        switch self {
-        case .audio: "Audio"
-        case .screen: "Entire Screen"
-        }
-    }
-}
-
 public enum RecorderShortcutPreferences {
-    public static let modeKey = "ShortcutRecordingMode"
     public static let audioSystemAudioKey = "ShortcutAudioIncludesSystemAudio"
     public static let screenSystemAudioKey = "ShortcutScreenIncludesSystemAudio"
     public static let screenMicrophoneKey = "ShortcutScreenIncludesMicrophone"
 
-    public static func mode(defaults: UserDefaults = .standard) -> ShortcutRecordingMode {
-        defaults.string(forKey: modeKey)
-            .flatMap(ShortcutRecordingMode.init(rawValue:))
-            ?? .audio
-    }
-
     public static func configuration(
+        for mode: RecordingMode,
         defaults: UserDefaults = .standard,
-        microphones: [MediaDevice] = DeviceCatalog.microphones()
+        microphones: [MediaDevice] = DeviceCatalog.microphones(),
+        cameras: [MediaDevice] = DeviceCatalog.cameras()
     ) -> CaptureConfiguration {
-        let selectedMode = mode(defaults: defaults)
         let microphoneID = DeviceCatalog.preferredMicrophoneID(in: microphones)
-        switch selectedMode {
+        switch mode {
         case .audio:
             return CaptureConfiguration(
                 mode: .audio,
@@ -60,6 +40,17 @@ public enum RecorderShortcutPreferences {
                     key: screenMicrophoneKey,
                     defaultValue: true
                 ),
+                width: 1920,
+                height: 1080,
+                framesPerSecond: 30
+            )
+        case .camera:
+            return CaptureConfiguration(
+                mode: .camera,
+                microphoneID: microphoneID,
+                cameraID: DeviceCatalog.preferredCameraID(in: cameras),
+                capturesSystemAudio: false,
+                capturesMicrophone: true,
                 width: 1920,
                 height: 1080,
                 framesPerSecond: 30

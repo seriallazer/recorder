@@ -9,8 +9,6 @@ struct SettingsView: View {
     private var diarizationMode = DiarizationMode.automatic.rawValue
     @AppStorage(RecorderPreferences.expectedSpeakerCountKey)
     private var expectedSpeakerCount = 2
-    @AppStorage(RecorderShortcutPreferences.modeKey)
-    private var shortcutMode = ShortcutRecordingMode.audio.rawValue
     @AppStorage(RecorderShortcutPreferences.audioSystemAudioKey)
     private var shortcutAudioIncludesSystemAudio = false
     @AppStorage(RecorderShortcutPreferences.screenSystemAudioKey)
@@ -35,30 +33,33 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Global Recording Shortcut") {
-                Picker("⌘L records", selection: $shortcutMode) {
-                    ForEach(ShortcutRecordingMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode.rawValue)
-                    }
+                LabeledContent("Audio") {
+                    Text("⌘L").font(.system(.body, design: .monospaced).bold())
                 }
-                .pickerStyle(.segmented)
+                Toggle(
+                    "Include meeting/system audio",
+                    isOn: $shortcutAudioIncludesSystemAudio
+                )
 
-                if shortcutMode == ShortcutRecordingMode.audio.rawValue {
-                    Toggle(
-                        "Include meeting/system audio",
-                        isOn: $shortcutAudioIncludesSystemAudio
-                    )
-                } else {
-                    Toggle(
-                        "Record system audio",
-                        isOn: $shortcutScreenIncludesSystemAudio
-                    )
-                    Toggle(
-                        "Record microphone",
-                        isOn: $shortcutScreenIncludesMicrophone
-                    )
+                Divider()
+                LabeledContent("Entire screen") {
+                    Text("⌘N").font(.system(.body, design: .monospaced).bold())
+                }
+                Toggle(
+                    "Record system audio",
+                    isOn: $shortcutScreenIncludesSystemAudio
+                )
+                Toggle(
+                    "Record microphone",
+                    isOn: $shortcutScreenIncludesMicrophone
+                )
+
+                Divider()
+                LabeledContent("Movie/video") {
+                    Text("⌘B").font(.system(.body, design: .monospaced).bold())
                 }
 
-                Text("While Recorder is running, press ⌘L from any app to start immediately with these settings. Press it again to stop, save, and begin transcription automatically. Recorder reserves ⌘L globally, so it will not select the address bar in other apps while Recorder is open.")
+                Text("While Recorder is running, use any shortcut from any app to start immediately. Press any recording shortcut again to stop, save, and begin transcription automatically. These keys are reserved globally while Recorder is open.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

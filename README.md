@@ -27,9 +27,11 @@ Local builds use a stable designated requirement for `local.recorder.app`, so re
 
 ## Global recording shortcut
 
-While Recorder is running, press `⌘L` from any app to start recording immediately. Press `⌘L` again to stop, save, and start local transcription automatically. Settings lets you choose whether the shortcut records microphone audio or the entire screen, along with its system-audio and microphone options. Shortcut screen recordings default to 1080p at 30 fps and use the preferred internal microphone.
+While Recorder is running, press `⌘L` for audio, `⌘N` for the entire screen, or `⌘B` for movie/video from any app. Press any recording shortcut again to stop, save, and start local transcription automatically. Settings provides system-audio and microphone options. Shortcut screen and movie recordings default to 1080p at 30 fps and use the preferred internal microphone/camera.
 
-Because this is a system-wide shortcut, Recorder reserves `⌘L` while it is open; the same key combination will not select the address bar in browsers and other apps during that time.
+Recorder adds a subtle menu-bar waveform: muted gray while idle, bold while recording, with a small `s` for screen or `v` for movie/video capture. The menu shows elapsed time and can stop, save, and transcribe the active capture.
+
+Because these are system-wide shortcuts, Recorder reserves `⌘L`, `⌘N`, and `⌘B` while it is open; other apps will not receive those key combinations during that time.
 
 ## Recording library
 
