@@ -31,6 +31,52 @@ final class ShortcutRecordingPreferencesTests: XCTestCase {
         XCTAssertFalse(configuration.capturesSystemAudio)
     }
 
+    func testShortcutStartsOnlyWhenNoRecordingIsActive() {
+        XCTAssertEqual(
+            RecorderShortcutPreferences.action(
+                activeMode: nil,
+                requestedMode: .screen
+            ),
+            .start
+        )
+    }
+
+    func testMatchingShortcutStopsItsActiveRecording() {
+        for mode in RecordingMode.allCases {
+            XCTAssertEqual(
+                RecorderShortcutPreferences.action(
+                    activeMode: mode,
+                    requestedMode: mode
+                ),
+                .stop
+            )
+        }
+    }
+
+    func testDifferentShortcutCannotStopOrReplaceActiveRecording() {
+        XCTAssertEqual(
+            RecorderShortcutPreferences.action(
+                activeMode: .audio,
+                requestedMode: .screen
+            ),
+            .blocked(activeMode: .audio)
+        )
+        XCTAssertEqual(
+            RecorderShortcutPreferences.action(
+                activeMode: .screen,
+                requestedMode: .camera
+            ),
+            .blocked(activeMode: .screen)
+        )
+        XCTAssertEqual(
+            RecorderShortcutPreferences.action(
+                activeMode: .camera,
+                requestedMode: .audio
+            ),
+            .blocked(activeMode: .camera)
+        )
+    }
+
     func testScreenDefaultsCaptureEntireDisplayWithSystemAndMicrophoneAudio() {
         let configuration = RecorderShortcutPreferences.configuration(
             for: .screen,

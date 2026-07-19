@@ -153,14 +153,43 @@ final class ShortcutRecordingController: ObservableObject {
         handlingShortcut = true
         defer { handlingShortcut = false }
 
-        if coordinator.activeRecording != nil {
+        switch RecorderShortcutPreferences.action(
+            activeMode: coordinator.activeRecording?.mode,
+            requestedMode: mode
+        ) {
+        case .stop:
             await coordinator.stop()
             return
+        case .blocked(let activeMode):
+            coordinator.presentedError = blockedMessage(
+                activeMode: activeMode,
+                requestedMode: mode
+            )
+            return
+        case .start:
+            break
         }
 
         let configuration = RecorderShortcutPreferences.configuration(for: mode)
         guard await permissionsAreAvailable(for: configuration) else { return }
         await coordinator.start(configuration: configuration)
+    }
+
+    private func blockedMessage(
+        activeMode: RecordingMode,
+        requestedMode: RecordingMode
+    ) -> String {
+        let activeShortcut = shortcutName(for: activeMode)
+        let requestedShortcut = shortcutName(for: requestedMode)
+        return "A \(activeMode.displayName.lowercased()) recording is already running. Stop it with \(activeShortcut) or the Recorder controls before using \(requestedShortcut)."
+    }
+
+    private func shortcutName(for mode: RecordingMode) -> String {
+        switch mode {
+        case .audio: "⌘L"
+        case .screen: "⌘N"
+        case .camera: "⌘B"
+        }
     }
 
     private func permissionsAreAvailable(

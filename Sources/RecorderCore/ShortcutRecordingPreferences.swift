@@ -1,9 +1,25 @@
 import Foundation
 
+public enum ShortcutRecordingAction: Equatable, Sendable {
+    case start
+    case stop
+    case blocked(activeMode: RecordingMode)
+}
+
 public enum RecorderShortcutPreferences {
     public static let audioSystemAudioKey = "ShortcutAudioIncludesSystemAudio"
     public static let screenSystemAudioKey = "ShortcutScreenIncludesSystemAudio"
     public static let screenMicrophoneKey = "ShortcutScreenIncludesMicrophone"
+
+    public static func action(
+        activeMode: RecordingMode?,
+        requestedMode: RecordingMode
+    ) -> ShortcutRecordingAction {
+        guard let activeMode else { return .start }
+        return activeMode == requestedMode
+            ? .stop
+            : .blocked(activeMode: activeMode)
+    }
 
     public static func configuration(
         for mode: RecordingMode,

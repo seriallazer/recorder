@@ -59,7 +59,7 @@ struct SettingsView: View {
                     Text("⌘B").font(.system(.body, design: .monospaced).bold())
                 }
 
-                Text("While Recorder is running, use any shortcut from any app to start immediately. Press any recording shortcut again to stop, save, and begin transcription automatically. These keys are reserved globally while Recorder is open.")
+                Text("While Recorder is running, use a shortcut from any app to start immediately. Press the same shortcut again to stop, save, and begin transcription automatically. Other recording modes remain blocked until capture finishes. These keys are reserved globally while Recorder is open.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
