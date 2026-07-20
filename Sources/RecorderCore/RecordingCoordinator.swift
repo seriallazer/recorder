@@ -265,22 +265,34 @@ public final class RecordingCoordinator: ObservableObject {
         try library.save(updated, in: folder)
     }
 
-    public func exportTrimmed(_ recording: RecordingManifest, to destinationURL: URL) async throws {
+    public func exportTrimmed(
+        _ recording: RecordingManifest,
+        to destinationURL: URL,
+        startTime: TimeInterval? = nil,
+        endTime: TimeInterval? = nil
+    ) async throws {
         let folder = library.folderURL(for: recording.id)
         guard let source = recording.fileURL(for: recording.mediaFile, in: folder) else {
             throw RecorderError.missingMedia
         }
+        let requestedStart = startTime ?? recording.trimStart
+        let requestedEnd = endTime ?? recording.effectiveTrimEnd
+        let exportStart = min(max(0, requestedStart), recording.duration)
+        let exportEnd = min(max(exportStart, requestedEnd), recording.duration)
+        guard exportEnd > exportStart else {
+            throw RecorderError.finalizationFailed("The trim end must be after the trim start.")
+        }
         try await finalizer.exportTrimmed(
             sourceURL: source,
             destinationURL: destinationURL,
-            startTime: recording.trimStart,
-            endTime: recording.effectiveTrimEnd
+            startTime: exportStart,
+            endTime: exportEnd
         )
         if let document = loadTranscript(for: recording) {
             let textURL = destinationURL.deletingPathExtension().appendingPathExtension("txt")
             try document.plainText(
-                trimStart: recording.trimStart,
-                trimEnd: recording.effectiveTrimEnd
+                trimStart: exportStart,
+                trimEnd: exportEnd
             ).write(to: textURL, atomically: true, encoding: .utf8)
         }
     }

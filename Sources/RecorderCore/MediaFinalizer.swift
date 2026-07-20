@@ -155,10 +155,18 @@ public struct NativeMediaFinalizer: MediaFinalizing {
         }
         try? FileManager.default.removeItem(at: destinationURL)
         let asset = AVURLAsset(url: sourceURL)
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        let type: AVFileType = destinationURL.pathExtension.lowercased() == "m4a" ? .m4a : .mov
+        let preset = type == .m4a
+            ? AVAssetExportPresetAppleM4A
+            : AVAssetExportPresetHighestQuality
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: preset) else {
             throw RecorderError.finalizationFailed("A trim exporter could not be created.")
         }
-        let type: AVFileType = destinationURL.pathExtension.lowercased() == "m4a" ? .m4a : .mov
+        guard exporter.supportedFileTypes.contains(type) else {
+            throw RecorderError.finalizationFailed(
+                "The selected trim format is not supported for this recording."
+            )
+        }
         exporter.outputURL = destinationURL
         exporter.outputFileType = type
         exporter.shouldOptimizeForNetworkUse = false

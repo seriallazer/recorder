@@ -147,9 +147,10 @@ struct RecordingDetailView: View {
                         .frame(minHeight: recording.mode == .audio ? 120 : 330)
                         .background(.black, in: RoundedRectangle(cornerRadius: 8))
                     HStack {
-                        Button { seek(to: recording.trimStart) } label: {
-                            Label("Trim Start", systemImage: "backward.end")
+                        Button { setTrimStartAtPlayhead() } label: {
+                            Label("Set Start Here", systemImage: "backward.end")
                         }
+                        .help("Use the current playback position as the trim start")
                         Spacer()
                         Picker("Speed", selection: $playbackRate) {
                             Text("0.5×").tag(Float(0.5))
@@ -164,9 +165,10 @@ struct RecordingDetailView: View {
                             player.defaultRate = rate
                         }
                         Spacer()
-                        Button { seek(to: recording.effectiveTrimEnd) } label: {
-                            Label("Trim End", systemImage: "forward.end")
+                        Button { setTrimEndAtPlayhead() } label: {
+                            Label("Set End Here", systemImage: "forward.end")
                         }
+                        .help("Use the current playback position as the trim end")
                     }
                 } else {
                     ContentUnavailableView("Media Missing", systemImage: "questionmark.video")
@@ -182,9 +184,21 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Start \(TranscriptDocument.timestamp(trimStart))")
-                    Slider(value: $trimStart, in: 0...max(0.01, min(trimEnd, recording.duration)))
+                    Slider(
+                        value: $trimStart,
+                        in: 0...max(0.01, min(trimEnd, recording.duration)),
+                        onEditingChanged: { editing in
+                            if !editing { seek(to: trimStart) }
+                        }
+                    )
                     Text("End \(TranscriptDocument.timestamp(trimEnd))")
-                    Slider(value: $trimEnd, in: min(recording.duration, max(trimStart, 0))...max(recording.duration, 0.01))
+                    Slider(
+                        value: $trimEnd,
+                        in: min(recording.duration, max(trimStart, 0))...max(recording.duration, 0.01),
+                        onEditingChanged: { editing in
+                            if !editing { seek(to: trimEnd) }
+                        }
+                    )
                 }
                 HStack {
                     Text("The original is preserved. Export creates a new media file and matching transcript.")
@@ -193,11 +207,9 @@ struct RecordingDetailView: View {
                     Button("Reset") {
                         trimStart = 0
                         trimEnd = recording.duration
-                        try? coordinator.updateTrim(for: recording, start: trimStart, end: trimEnd)
+                        saveTrimMarkers()
                     }
-                    Button("Save Markers") {
-                        try? coordinator.updateTrim(for: recording, start: trimStart, end: trimEnd)
-                    }
+                    Button("Save Markers") { saveTrimMarkers() }
                     Button("Export…") { exportTrimmed() }
                         .buttonStyle(.borderedProminent)
                         .disabled(exporting || trimEnd <= trimStart)
@@ -228,12 +240,12 @@ struct RecordingDetailView: View {
                             .foregroundStyle(.orange)
                     }
                     ForEach(transcript.segments) { segment in
-                        if segment.endTime >= recording.trimStart && segment.startTime <= recording.effectiveTrimEnd {
+                        if segment.endTime >= trimStart && segment.startTime <= trimEnd {
                             Button {
                                 seek(to: segment.startTime)
                             } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                    Text(TranscriptDocument.timestamp(max(0, segment.startTime - recording.trimStart)))
+                                    Text(TranscriptDocument.timestamp(max(0, segment.startTime - trimStart)))
                                         .monospacedDigit().foregroundStyle(.secondary)
                                     Text(segment.speaker).fontWeight(.semibold).frame(width: 85, alignment: .leading)
                                     Text(segment.text).frame(maxWidth: .infinity, alignment: .leading)
@@ -266,17 +278,49 @@ struct RecordingDetailView: View {
     }
 
     private func load() {
+        let playbackPosition = player?.currentTime()
         trimStart = recording.trimStart
         trimEnd = recording.effectiveTrimEnd
         transcript = coordinator.loadTranscript(for: recording)
         let folder = library.folderURL(for: recording.id)
         if let mediaURL = recording.fileURL(for: recording.mediaFile, in: folder) {
             player = AVPlayer(url: mediaURL)
+            if let playbackPosition, playbackPosition.isNumeric {
+                player?.seek(to: playbackPosition, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         }
     }
 
     private func seek(to seconds: TimeInterval) {
         player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func setTrimStartAtPlayhead() {
+        guard let seconds = currentPlaybackSeconds else { return }
+        trimStart = min(max(0, seconds), trimEnd)
+    }
+
+    private func setTrimEndAtPlayhead() {
+        guard let seconds = currentPlaybackSeconds else { return }
+        trimEnd = max(trimStart, min(seconds, recording.duration))
+    }
+
+    private var currentPlaybackSeconds: TimeInterval? {
+        guard let seconds = player.map({ CMTimeGetSeconds($0.currentTime()) }),
+              seconds.isFinite else { return nil }
+        return seconds
+    }
+
+    private func saveTrimMarkers() {
+        do {
+            try coordinator.updateTrim(
+                for: recording,
+                start: trimStart,
+                end: trimEnd
+            )
+        } catch {
+            coordinator.presentedError = error.localizedDescription
+        }
     }
 
     private func reveal() {
@@ -330,7 +374,12 @@ struct RecordingDetailView: View {
         Task {
             defer { exporting = false }
             do {
-                try await coordinator.exportTrimmed(recording, to: url)
+                try await coordinator.exportTrimmed(
+                    recording,
+                    to: url,
+                    startTime: trimStart,
+                    endTime: trimEnd
+                )
             } catch {
                 coordinator.presentedError = error.localizedDescription
             }

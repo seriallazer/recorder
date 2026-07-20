@@ -55,6 +55,44 @@ final class CaptureTimelineTests: XCTestCase {
             .appendingPathComponent("camera-timeline-\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: outputURL) }
 
+        try await writeMovie(to: outputURL, frameCount: 6)
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        XCTAssertGreaterThan(CMTimeGetSeconds(duration), 0)
+        XCTAssertLessThan(CMTimeGetSeconds(duration), 1)
+        XCTAssertEqual(videoTracks.count, 1)
+
+        let imageGenerator = AVAssetImageGenerator(asset: asset)
+        imageGenerator.appliesPreferredTrackTransform = true
+        _ = try imageGenerator.copyCGImage(at: .zero, actualTime: nil)
+    }
+
+    func testTrimmedVideoExportUsesRequestedTimeRange() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.mov")
+        let destination = root.appendingPathComponent("trimmed.mov")
+        try await writeMovie(to: source, frameCount: 90)
+
+        try await NativeMediaFinalizer().exportTrimmed(
+            sourceURL: source,
+            destinationURL: destination,
+            startTime: 0.5,
+            endTime: 1.5
+        )
+
+        let asset = AVURLAsset(url: destination)
+        let duration = try await asset.load(.duration).seconds
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        XCTAssertEqual(duration, 1, accuracy: 0.08)
+        XCTAssertEqual(videoTracks.count, 1)
+    }
+
+    private func writeMovie(to outputURL: URL, frameCount: Int) async throws {
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
         let input = AVAssetWriterInput(
             mediaType: .video,
@@ -70,7 +108,7 @@ final class CaptureTimelineTests: XCTestCase {
         writer.startSession(atSourceTime: .zero)
 
         let hostClockStart = CMTime(seconds: 176_820, preferredTimescale: 600)
-        for frameIndex in 0..<6 {
+        for frameIndex in 0..<frameCount {
             let sourceTime = CMTimeAdd(
                 hostClockStart,
                 CMTime(value: CMTimeValue(frameIndex), timescale: 30)
@@ -88,17 +126,6 @@ final class CaptureTimelineTests: XCTestCase {
         }
         input.markAsFinished()
         try await writer.finishWritingAsync()
-
-        let asset = AVURLAsset(url: outputURL)
-        let duration = try await asset.load(.duration)
-        let videoTracks = try await asset.loadTracks(withMediaType: .video)
-        XCTAssertGreaterThan(CMTimeGetSeconds(duration), 0)
-        XCTAssertLessThan(CMTimeGetSeconds(duration), 1)
-        XCTAssertEqual(videoTracks.count, 1)
-
-        let imageGenerator = AVAssetImageGenerator(asset: asset)
-        imageGenerator.appliesPreferredTrackTransform = true
-        _ = try imageGenerator.copyCGImage(at: .zero, actualTime: nil)
     }
 
     private func makeVideoSampleBuffer(presentationTime: CMTime) throws -> CMSampleBuffer {

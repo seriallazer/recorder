@@ -82,6 +82,67 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: working.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: working.appendingPathComponent("source.mov").path))
     }
+
+    func testExportUsesCurrentUnsavedTrimSelection() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(root.path, forKey: "RecorderLibraryPath")
+        let library = RecordingLibrary(defaults: defaults)
+        let finalizer = TrimSpyFinalizer()
+        let coordinator = RecordingCoordinator(
+            library: library,
+            finalizer: finalizer
+        )
+        var (recording, folder) = try library.create(
+            configuration: CaptureConfiguration(mode: .screen)
+        )
+        recording.mediaFile = "recording.mov"
+        recording.duration = 100
+        recording.trimStart = 0
+        recording.trimEnd = 100
+        try Data("media".utf8).write(to: folder.appendingPathComponent("recording.mov"))
+        try library.save(recording, in: folder)
+
+        try await coordinator.exportTrimmed(
+            recording,
+            to: root.appendingPathComponent("trimmed.mov"),
+            startTime: 12.5,
+            endTime: 34.25
+        )
+
+        let range = await finalizer.exportedRange
+        XCTAssertEqual(range?.start, 12.5)
+        XCTAssertEqual(range?.end, 34.25)
+    }
+}
+
+private actor TrimSpyFinalizer: MediaFinalizing {
+    private(set) var exportedRange: (start: TimeInterval, end: TimeInterval)?
+
+    func finalize(
+        artifacts: CaptureArtifacts,
+        configuration: CaptureConfiguration,
+        destinationDirectory: URL
+    ) async throws -> FinalizedMedia {
+        FinalizedMedia(
+            mediaURL: artifacts.primaryMediaURL,
+            audioURL: artifacts.primaryMediaURL,
+            microphoneStemURL: nil,
+            systemStemURL: nil,
+            duration: 1
+        )
+    }
+
+    func exportTrimmed(
+        sourceURL: URL,
+        destinationURL: URL,
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) async throws {
+        exportedRange = (startTime, endTime)
+    }
 }
 
 private actor DelayedCapture: RecordingCapturing {

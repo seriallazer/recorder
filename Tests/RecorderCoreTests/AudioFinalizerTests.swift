@@ -62,7 +62,29 @@ final class AudioFinalizerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("microphone.m4a").path))
     }
 
-    private func writeTone(to url: URL, frequency: Double) throws {
+    func testTrimmedExportUsesRequestedTimeRange() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.m4a")
+        let destination = root.appendingPathComponent("trimmed.m4a")
+        try writeTone(to: source, frequency: 440, duration: 2)
+
+        try await NativeMediaFinalizer().exportTrimmed(
+            sourceURL: source,
+            destinationURL: destination,
+            startTime: 0.5,
+            endTime: 1.25
+        )
+
+        let asset = AVURLAsset(url: destination)
+        let duration = try await asset.load(.duration).seconds
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(duration, 0.75, accuracy: 0.08)
+        XCTAssertFalse(audioTracks.isEmpty)
+    }
+
+    private func writeTone(to url: URL, frequency: Double, duration: Double = 1) throws {
         let sampleRate = 48_000.0
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
         let file = try AVAudioFile(
@@ -76,7 +98,7 @@ final class AudioFinalizerTests: XCTestCase {
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
-        let frames = AVAudioFrameCount(sampleRate)
+        let frames = AVAudioFrameCount(sampleRate * duration)
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
         buffer.frameLength = frames
         let samples = try XCTUnwrap(buffer.floatChannelData?[0])
