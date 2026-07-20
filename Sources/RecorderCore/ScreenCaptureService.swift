@@ -106,7 +106,10 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         if configuration.capturesMicrophone {
             let url = workingDirectory.appendingPathComponent("microphone.m4a")
             let microphoneWriter = MicrophoneWriter()
-            try await microphoneWriter.start(deviceID: configuration.microphoneID, outputURL: url)
+            try await microphoneWriter.start(
+                configuration: configuration,
+                outputURL: url
+            )
             self.microphoneWriter = microphoneWriter
             micURL = url
         }
@@ -117,7 +120,11 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.stream = stream
         self.writerStarted = false
         self.writerSessionStartTime = nil
-        let artifacts = CaptureArtifacts(primaryMediaURL: sourceURL, microphoneStemURL: micURL)
+        let artifacts = CaptureArtifacts(
+            primaryMediaURL: sourceURL,
+            microphoneStemURL: micURL,
+            echoCancellationApplied: microphoneWriter?.appliedEchoCancellation
+        )
         self.artifacts = artifacts
         do {
             try await stream.startCapture()

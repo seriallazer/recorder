@@ -373,6 +373,9 @@ private struct RecordingInfoPopover: View {
                     infoRow("Audio", audioDetails)
                 }
                 infoRow("Audio captured", capturedAudio)
+                if let echoCancellationStatus {
+                    infoRow("Echo cancellation", echoCancellationStatus)
+                }
                 if let tag = recording.tag {
                     infoRow("Tag", tag)
                 }
@@ -461,6 +464,17 @@ private struct RecordingInfoPopover: View {
         if recording.configuration.capturesSystemAudio { sources.append("System") }
         if recording.configuration.capturesMicrophone { sources.append("Microphone") }
         return sources.isEmpty ? "None" : sources.joined(separator: " + ")
+    }
+
+    private var echoCancellationStatus: String? {
+        guard recording.configuration.capturesSystemAudio,
+              recording.configuration.capturesMicrophone else { return nil }
+        if recording.echoCancellationApplied == true { return "Applied" }
+        if recording.configuration.echoCancellationMode == .off { return "Off" }
+        if recording.echoCancellationApplied == false {
+            return "Unavailable — raw fallback"
+        }
+        return "Not recorded"
     }
 
     private func bytes(_ count: Int64) -> String {

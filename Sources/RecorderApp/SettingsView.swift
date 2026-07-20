@@ -10,6 +10,8 @@ struct SettingsView: View {
     private var diarizationMode = DiarizationMode.automatic.rawValue
     @AppStorage(RecorderPreferences.expectedSpeakerCountKey)
     private var expectedSpeakerCount = 2
+    @AppStorage(RecorderPreferences.echoCancellationModeKey)
+    private var echoCancellationMode = EchoCancellationMode.automatic.rawValue
     @AppStorage(RecorderShortcutPreferences.audioSystemAudioKey)
     private var shortcutAudioIncludesSystemAudio = false
     @AppStorage(RecorderShortcutPreferences.screenSystemAudioKey)
@@ -35,6 +37,17 @@ struct SettingsView: View {
                 Label("Transcription and speaker detection run locally.", systemImage: "lock.shield")
                 Text("Network access is used only when downloading the Core ML models for the first time.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Speaker Echo") {
+                Picker("Echo cancellation", selection: $echoCancellationMode) {
+                    ForEach(EchoCancellationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("Auto uses Apple's voice processing when microphone and system audio are recorded together on the Mac's default input and output. If it is unavailable, Recorder safely keeps the original microphone path. Off preserves completely raw microphone audio.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Global Recording Shortcut") {
                 ShortcutEditorRow(

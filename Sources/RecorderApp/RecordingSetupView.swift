@@ -160,6 +160,7 @@ struct RecordingSetupView: View {
             region: screenTarget == .region ? CaptureRegion(x: regionX, y: regionY, width: regionWidth, height: regionHeight) : nil,
             capturesSystemAudio: (mode == .screen || mode == .audio) && capturesSystemAudio,
             capturesMicrophone: mode != .screen || capturesMicrophone,
+            echoCancellationMode: RecorderPreferences.echoCancellationMode(),
             width: dimensions.0,
             height: dimensions.1,
             framesPerSecond: framesPerSecond

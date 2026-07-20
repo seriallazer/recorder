@@ -19,7 +19,8 @@ final class AudioFinalizerTests: XCTestCase {
             artifacts: CaptureArtifacts(
                 primaryMediaURL: microphone,
                 microphoneStemURL: microphone,
-                systemStemURL: system
+                systemStemURL: system,
+                echoCancellationApplied: true
             ),
             configuration: CaptureConfiguration(
                 mode: .audio,
@@ -33,6 +34,7 @@ final class AudioFinalizerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(finalized.microphoneStemURL).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(finalized.systemStemURL).path))
         XCTAssertGreaterThan(finalized.duration, 0.9)
+        XCTAssertEqual(finalized.echoCancellationApplied, true)
         let tracks = try await AVURLAsset(url: finalized.mediaURL).loadTracks(withMediaType: .audio)
         XCTAssertFalse(tracks.isEmpty)
     }

@@ -148,6 +148,7 @@ public final class RecordingCoordinator: ObservableObject {
                 : nil
             recording.microphoneStemFile = finalized.microphoneStemURL?.lastPathComponent
             recording.systemStemFile = finalized.systemStemURL?.lastPathComponent
+            recording.echoCancellationApplied = finalized.echoCancellationApplied
             recording.errorMessage = nil
             // Thumbnail generation is cosmetic. A decoder failure must never
             // turn a successfully finalized recording into a failed one.

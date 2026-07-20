@@ -173,7 +173,10 @@ public enum RecorderShortcutPreferences {
                     key: audioSystemAudioKey,
                     defaultValue: false
                 ),
-                capturesMicrophone: true
+                capturesMicrophone: true,
+                echoCancellationMode: RecorderPreferences.echoCancellationMode(
+                    defaults: defaults
+                )
             )
         case .screen:
             return CaptureConfiguration(
@@ -190,6 +193,9 @@ public enum RecorderShortcutPreferences {
                     defaults,
                     key: screenMicrophoneKey,
                     defaultValue: true
+                ),
+                echoCancellationMode: RecorderPreferences.echoCancellationMode(
+                    defaults: defaults
                 ),
                 width: 1920,
                 height: 1080,

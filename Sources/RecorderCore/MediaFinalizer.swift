@@ -63,7 +63,8 @@ public struct NativeMediaFinalizer: MediaFinalizing {
                 audioURL: mediaURL,
                 microphoneStemURL: finalizedMicrophoneURL,
                 systemStemURL: finalizedSystemURL,
-                duration: duration
+                duration: duration,
+                echoCancellationApplied: artifacts.echoCancellationApplied
             )
 
         case .camera:
@@ -137,7 +138,8 @@ public struct NativeMediaFinalizer: MediaFinalizing {
                 audioURL: finalizedAudioURL,
                 microphoneStemURL: finalizedMicrophoneURL,
                 systemStemURL: finalizedSystemURL,
-                duration: duration
+                duration: duration,
+                echoCancellationApplied: artifacts.echoCancellationApplied
             )
         }
     }

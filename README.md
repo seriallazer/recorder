@@ -33,6 +33,10 @@ Recorder adds a subtle menu-bar waveform: muted gray with no suffix while idle, 
 
 Because these are system-wide shortcuts, Recorder reserves the three configured key combinations while it is open; other apps will not receive them during that time.
 
+## Speaker echo cancellation
+
+When system audio and microphone are captured together, **Echo cancellation: Auto** uses Apple's on-device voice processing to remove speaker playback from the default microphone before the stems are mixed. Automatic gain control is disabled and other-audio ducking is minimized so the local voice and meeting volume remain natural. If the selected input is not the Mac's default microphone or voice processing cannot initialize, capture safely falls back to the original raw microphone path. The recording manifest and Info popover report whether cancellation was actually applied. Set the option to **Off** in Settings to preserve raw microphone audio.
+
 ## Recording library
 
 Recorder defaults to `~/Movies/Recorder`. The location can be changed in Settings. Every recording has its own folder containing:

@@ -14,6 +14,7 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
         var microphoneURL: URL?
         var systemURL: URL?
+        var echoCancellationApplied: Bool?
 
         if configuration.capturesSystemAudio {
             let url = workingDirectory.appendingPathComponent("system.m4a")
@@ -26,9 +27,10 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
             if configuration.capturesMicrophone {
                 let url = workingDirectory.appendingPathComponent("microphone.m4a")
                 let writer = MicrophoneWriter()
-                try await writer.start(deviceID: configuration.microphoneID, outputURL: url)
+                try await writer.start(configuration: configuration, outputURL: url)
                 microphoneWriter = writer
                 microphoneURL = url
+                echoCancellationApplied = writer.appliedEchoCancellation
             }
         } catch {
             _ = try? await systemAudioWriter?.stop()
@@ -42,7 +44,8 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
         let artifacts = CaptureArtifacts(
             primaryMediaURL: primaryURL,
             microphoneStemURL: microphoneURL,
-            systemStemURL: systemURL
+            systemStemURL: systemURL,
+            echoCancellationApplied: echoCancellationApplied
         )
         self.artifacts = artifacts
         return artifacts

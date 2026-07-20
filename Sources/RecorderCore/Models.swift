@@ -73,6 +73,20 @@ public enum DiarizationMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum EchoCancellationMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case off
+
+    public var id: Self { self }
+
+    public var displayName: String {
+        switch self {
+        case .automatic: "Auto"
+        case .off: "Off"
+        }
+    }
+}
+
 public struct DiarizationOptions: Hashable, Sendable {
     public var mode: DiarizationMode
     public var expectedSpeakerCount: Int
@@ -93,6 +107,7 @@ public struct DiarizationOptions: Hashable, Sendable {
 public enum RecorderPreferences {
     public static let diarizationModeKey = "SpeakerDiarizationMode"
     public static let expectedSpeakerCountKey = "ExpectedSpeakerCount"
+    public static let echoCancellationModeKey = "EchoCancellationMode"
 
     public static func diarizationOptions(defaults: UserDefaults = .standard) -> DiarizationOptions {
         let count = defaults.integer(forKey: expectedSpeakerCountKey)
@@ -103,6 +118,14 @@ public enum RecorderPreferences {
             mode: mode,
             expectedSpeakerCount: count == 0 ? 2 : count
         )
+    }
+
+    public static func echoCancellationMode(
+        defaults: UserDefaults = .standard
+    ) -> EchoCancellationMode {
+        defaults.string(forKey: echoCancellationModeKey)
+            .flatMap(EchoCancellationMode.init(rawValue:))
+            ?? .automatic
     }
 }
 
@@ -134,6 +157,7 @@ public struct CaptureConfiguration: Codable, Hashable, Sendable {
     public var region: CaptureRegion?
     public var capturesSystemAudio: Bool
     public var capturesMicrophone: Bool
+    public var echoCancellationMode: EchoCancellationMode?
     public var width: Int
     public var height: Int
     public var framesPerSecond: Int
@@ -148,6 +172,7 @@ public struct CaptureConfiguration: Codable, Hashable, Sendable {
         region: CaptureRegion? = nil,
         capturesSystemAudio: Bool = true,
         capturesMicrophone: Bool = true,
+        echoCancellationMode: EchoCancellationMode? = nil,
         width: Int = 1920,
         height: Int = 1080,
         framesPerSecond: Int = 30
@@ -161,6 +186,7 @@ public struct CaptureConfiguration: Codable, Hashable, Sendable {
         self.region = region
         self.capturesSystemAudio = capturesSystemAudio
         self.capturesMicrophone = capturesMicrophone
+        self.echoCancellationMode = echoCancellationMode
         self.width = width
         self.height = height
         self.framesPerSecond = framesPerSecond
@@ -186,6 +212,7 @@ public struct RecordingManifest: Codable, Identifiable, Hashable, Sendable {
     public var transcriptFile: String?
     public var thumbnailFile: String?
     public var speakerCount: Int?
+    public var echoCancellationApplied: Bool?
     public var errorMessage: String?
     public var configuration: CaptureConfiguration
 
@@ -207,6 +234,7 @@ public struct RecordingManifest: Codable, Identifiable, Hashable, Sendable {
         self.state = state
         self.duration = 0
         self.trimStart = 0
+        self.echoCancellationApplied = nil
         self.configuration = configuration
     }
 
@@ -302,11 +330,18 @@ public struct CaptureArtifacts: Sendable {
     public var primaryMediaURL: URL
     public var microphoneStemURL: URL?
     public var systemStemURL: URL?
+    public var echoCancellationApplied: Bool?
 
-    public init(primaryMediaURL: URL, microphoneStemURL: URL? = nil, systemStemURL: URL? = nil) {
+    public init(
+        primaryMediaURL: URL,
+        microphoneStemURL: URL? = nil,
+        systemStemURL: URL? = nil,
+        echoCancellationApplied: Bool? = nil
+    ) {
         self.primaryMediaURL = primaryMediaURL
         self.microphoneStemURL = microphoneStemURL
         self.systemStemURL = systemStemURL
+        self.echoCancellationApplied = echoCancellationApplied
     }
 }
 
@@ -316,6 +351,24 @@ public struct FinalizedMedia: Sendable {
     public var microphoneStemURL: URL?
     public var systemStemURL: URL?
     public var duration: TimeInterval
+
+    public var echoCancellationApplied: Bool?
+
+    public init(
+        mediaURL: URL,
+        audioURL: URL,
+        microphoneStemURL: URL?,
+        systemStemURL: URL?,
+        duration: TimeInterval,
+        echoCancellationApplied: Bool? = nil
+    ) {
+        self.mediaURL = mediaURL
+        self.audioURL = audioURL
+        self.microphoneStemURL = microphoneStemURL
+        self.systemStemURL = systemStemURL
+        self.duration = duration
+        self.echoCancellationApplied = echoCancellationApplied
+    }
 }
 
 public struct MediaDevice: Identifiable, Hashable, Sendable {

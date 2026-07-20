@@ -2,6 +2,38 @@ import AVFoundation
 import Accelerate
 
 enum AudioLevelMeter {
+    static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Float {
+        let frames = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        guard frames > 0, channels > 0 else { return 0 }
+
+        var sumSquares: Double = 0
+        var sampleCount = 0
+        if let floatChannels = buffer.floatChannelData {
+            for channel in 0..<channels {
+                var local: Float = 0
+                vDSP_svesq(
+                    floatChannels[channel],
+                    1,
+                    &local,
+                    vDSP_Length(frames)
+                )
+                sumSquares += Double(local)
+                sampleCount += frames
+            }
+        } else if let integerChannels = buffer.int16ChannelData {
+            for channel in 0..<channels {
+                for index in 0..<frames {
+                    let value = Double(integerChannels[channel][index])
+                        / Double(Int16.max)
+                    sumSquares += value * value
+                }
+                sampleCount += frames
+            }
+        }
+        return normalizedLevel(sumSquares: sumSquares, sampleCount: sampleCount)
+    }
+
     static func normalizedLevel(from sampleBuffer: CMSampleBuffer) -> Float {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let stream = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
@@ -63,6 +95,13 @@ enum AudioLevelMeter {
                 sampleCount += count
             }
         }
+        return normalizedLevel(sumSquares: sumSquares, sampleCount: sampleCount)
+    }
+
+    private static func normalizedLevel(
+        sumSquares: Double,
+        sampleCount: Int
+    ) -> Float {
         guard sampleCount > 0 else { return 0 }
         let rms = sqrt(sumSquares / Double(sampleCount))
         let decibels = 20 * log10(max(rms, 0.000_001))
