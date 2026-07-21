@@ -152,6 +152,54 @@ final class ScreenEchoCleanupTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: finalized.mediaURL.path))
     }
 
+    func testRepairServiceRejectsNonScreenRecordingsWithoutChangingManifest() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let manifest = RecordingManifest(
+            title: "Audio",
+            mode: .audio,
+            state: .ready,
+            configuration: CaptureConfiguration(mode: .audio)
+        )
+        let manifestURL = folder.appendingPathComponent("manifest.json")
+        let originalData = try JSONEncoder.recorder.encode(manifest)
+        try originalData.write(to: manifestURL)
+
+        do {
+            _ = try await ScreenEchoRepairService().repair(folder: folder)
+            XCTFail("Expected the repair service to reject a non-screen recording")
+        } catch let error as RecorderError {
+            XCTAssertEqual(error.localizedDescription, "Echo repair only supports screen recordings.")
+        }
+        XCTAssertEqual(try Data(contentsOf: manifestURL), originalData)
+    }
+
+    func testRepairServiceRecognizesAlreadyCleanRecordingWithoutMediaAccess() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        var manifest = RecordingManifest(
+            title: "Screen",
+            mode: .screen,
+            state: .ready,
+            configuration: CaptureConfiguration(mode: .screen)
+        )
+        manifest.echoCancellationApplied = true
+        try JSONEncoder.recorder.encode(manifest).write(
+            to: folder.appendingPathComponent("manifest.json")
+        )
+
+        let result = try await ScreenEchoRepairService().repair(folder: folder)
+
+        XCTAssertFalse(result.applied)
+        XCTAssertTrue(result.alreadyClean)
+    }
+
     private func speechLikeSamples(count: Int, seed: UInt64) -> [Float] {
         var state = seed
         var samples = [Float](repeating: 0, count: count)

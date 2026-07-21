@@ -108,6 +108,10 @@ public actor LocalTranscriptionService: Transcribing, ModelManaging {
         progress?("Finalizing transcript", 0.95)
         allSegments.sort { $0.startTime < $1.startTime }
         if tracks.count > 1 {
+            if recording.mode == .screen,
+               recording.echoCancellationApplied == true {
+                allSegments = TranscriptAligner.removingCrossSourceEcho(in: allSegments)
+            }
             allSegments = TranscriptAligner.markingCrossSourceOverlaps(in: allSegments)
         }
         let speakerCount = Set(allSegments.map(\.speaker)).count

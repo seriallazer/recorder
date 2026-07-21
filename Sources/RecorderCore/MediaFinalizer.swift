@@ -143,11 +143,16 @@ public struct NativeMediaFinalizer: MediaFinalizing {
 
             let duration = try await mediaDuration(mediaURL)
             let finalizedAudioURL: URL
-            do {
-                try await exportAudio(from: mediaURL, to: audioURL)
+            if automaticEchoCleanupApplied,
+               FileManager.default.fileExists(atPath: audioURL.path) {
                 finalizedAudioURL = audioURL
-            } catch RecorderError.missingMedia {
-                finalizedAudioURL = mediaURL
+            } else {
+                do {
+                    try await exportAudio(from: mediaURL, to: audioURL)
+                    finalizedAudioURL = audioURL
+                } catch RecorderError.missingMedia {
+                    finalizedAudioURL = mediaURL
+                }
             }
             return FinalizedMedia(
                 mediaURL: mediaURL,
@@ -250,126 +255,17 @@ public struct NativeMediaFinalizer: MediaFinalizing {
             systemURL: systemURL,
             microphoneURL: microphoneURL
         ) else { return false }
-
-        let fileManager = FileManager.default
-        let cleanedMicrophone = destinationDirectory.appendingPathComponent(".microphone.echo-cleaned.tmp.m4a")
-        let cleanedRecording = destinationDirectory.appendingPathComponent(".recording.echo-cleaned.tmp.mov")
-        let originalMicrophone = destinationDirectory.appendingPathComponent("microphone.pre-echo-cleanup.m4a")
-        let originalRecording = destinationDirectory.appendingPathComponent("recording.pre-echo-cleanup.mov")
-        let originalAudio = destinationDirectory.appendingPathComponent("audio.pre-echo-cleanup.m4a")
-        defer {
-            try? fileManager.removeItem(at: cleanedMicrophone)
-            try? fileManager.removeItem(at: cleanedRecording)
-        }
-
-        try await exportDuckedMicrophone(
-            sourceURL: microphoneURL,
-            intervals: plan.duckingIntervals,
-            destinationURL: cleanedMicrophone
+        let audioURL = destinationDirectory.appendingPathComponent("audio.m4a")
+        try await ScreenEchoMediaProcessor.apply(
+            plan: plan,
+            sourceVideoURL: sourceVideoURL,
+            recordingURL: recordingURL,
+            audioURL: audioURL,
+            microphoneURL: microphoneURL,
+            systemURL: systemURL,
+            destinationDirectory: destinationDirectory
         )
-        try await mixScreenMedia(
-            videoURL: sourceVideoURL,
-            microphoneURL: cleanedMicrophone,
-            destinationURL: cleanedRecording
-        )
-        let sourceHasVideo = try await hasVideoTrack(sourceVideoURL)
-        let cleanedMicrophoneHasAudio = try await hasAudioTrack(cleanedMicrophone)
-        let cleanedRecordingHasAudio = try await hasAudioTrack(cleanedRecording)
-        let cleanedRecordingHasVideo = try await hasVideoTrack(cleanedRecording)
-        guard cleanedMicrophoneHasAudio,
-              cleanedRecordingHasAudio,
-              !sourceHasVideo || cleanedRecordingHasVideo else {
-            throw RecorderError.finalizationFailed("Automatic echo cleanup produced invalid audio.")
-        }
-
-        // Keep complete rollback media before swapping either active file. The raw
-        // stems plus the original movie make cleanup fully reversible.
-        try replaceCopy(from: microphoneURL, to: originalMicrophone)
-        try replaceCopy(from: recordingURL, to: originalRecording)
-        try? await exportAudio(from: originalRecording, to: originalAudio)
-
-        do {
-            try replaceMove(from: cleanedMicrophone, to: microphoneURL)
-            try replaceMove(from: cleanedRecording, to: recordingURL)
-        } catch {
-            // The originals are already durable. Restore the active files as well
-            // so a late filesystem failure degrades to the unprocessed recording.
-            try? replaceCopy(from: originalMicrophone, to: microphoneURL)
-            try? replaceCopy(from: originalRecording, to: recordingURL)
-            throw error
-        }
         return true
-    }
-
-    private func exportDuckedMicrophone(
-        sourceURL: URL,
-        intervals: [EchoDuckingInterval],
-        destinationURL: URL
-    ) async throws {
-        let asset = AVURLAsset(url: sourceURL)
-        let duration = try await asset.load(.duration)
-        guard let sourceTrack = try await asset.loadTracks(withMediaType: .audio).first else {
-            throw RecorderError.missingMedia
-        }
-        let composition = AVMutableComposition()
-        guard let targetTrack = composition.addMutableTrack(
-            withMediaType: .audio,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else {
-            throw RecorderError.finalizationFailed("The microphone cleanup track could not be created.")
-        }
-        try targetTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: duration),
-            of: sourceTrack,
-            at: .zero
-        )
-
-        let parameters = AVMutableAudioMixInputParameters(track: targetTrack)
-        parameters.setVolume(1, at: .zero)
-        let totalDuration = max(0, duration.seconds)
-        for interval in intervals {
-            let attackStart = max(0, interval.start - 0.04)
-            let attackEnd = min(totalDuration, max(attackStart, interval.start + 0.004))
-            let releaseStart = min(totalDuration, max(attackEnd, interval.end))
-            let releaseEnd = min(totalDuration, releaseStart + 0.22)
-            if attackEnd > attackStart {
-                parameters.setVolumeRamp(
-                    fromStartVolume: 1,
-                    toEndVolume: 0.12,
-                    timeRange: CMTimeRange(
-                        start: CMTime(seconds: attackStart, preferredTimescale: 48_000),
-                        end: CMTime(seconds: attackEnd, preferredTimescale: 48_000)
-                    )
-                )
-            } else {
-                parameters.setVolume(0.12, at: CMTime(seconds: attackStart, preferredTimescale: 48_000))
-            }
-            parameters.setVolume(0.12, at: CMTime(seconds: releaseStart, preferredTimescale: 48_000))
-            if releaseEnd > releaseStart {
-                parameters.setVolumeRamp(
-                    fromStartVolume: 0.12,
-                    toEndVolume: 1,
-                    timeRange: CMTimeRange(
-                        start: CMTime(seconds: releaseStart, preferredTimescale: 48_000),
-                        end: CMTime(seconds: releaseEnd, preferredTimescale: 48_000)
-                    )
-                )
-            }
-        }
-
-        let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = [parameters]
-        try? FileManager.default.removeItem(at: destinationURL)
-        guard let exporter = AVAssetExportSession(
-            asset: composition,
-            presetName: AVAssetExportPresetAppleM4A
-        ) else {
-            throw RecorderError.finalizationFailed("The cleaned microphone audio could not be created.")
-        }
-        exporter.outputURL = destinationURL
-        exporter.outputFileType = .m4a
-        exporter.audioMix = audioMix
-        try await exporter.exportAsync()
     }
 
     private func mixAudioTracks(_ sourceURLs: [URL], destinationURL: URL) async throws {
@@ -426,18 +322,9 @@ public struct NativeMediaFinalizer: MediaFinalizing {
         !(try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)).isEmpty
     }
 
-    private func hasVideoTrack(_ url: URL) async throws -> Bool {
-        !(try await AVURLAsset(url: url).loadTracks(withMediaType: .video)).isEmpty
-    }
-
     private func replaceCopy(from source: URL, to destination: URL) throws {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.copyItem(at: source, to: destination)
-    }
-
-    private func replaceMove(from source: URL, to destination: URL) throws {
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: source, to: destination)
     }
 }
 

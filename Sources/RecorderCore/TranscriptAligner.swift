@@ -27,6 +27,57 @@ public struct SpeakerInterval: Hashable, Sendable {
 }
 
 public enum TranscriptAligner {
+    public static func removingCrossSourceEcho(
+        in segments: [TranscriptSegment]
+    ) -> [TranscriptSegment] {
+        let systemSegments = segments
+            .filter { $0.source == .system }
+            .sorted { $0.startTime < $1.startTime }
+        guard !systemSegments.isEmpty else { return segments }
+
+        return segments.filter { segment in
+            guard segment.source == .microphone else { return true }
+            let microphoneTokens = normalizedTokens(segment.text)
+            guard !microphoneTokens.isEmpty else { return true }
+            let candidates = systemSegments.filter {
+                $0.endTime > segment.startTime - 0.35
+                    && $0.startTime < segment.endTime + 0.35
+            }
+            guard !candidates.isEmpty else { return true }
+
+            if microphoneTokens.count <= 2 {
+                let compactEcho = candidates.contains { candidate in
+                    let systemTokens = normalizedTokens(candidate.text)
+                    let startDelay = segment.startTime - candidate.startTime
+                    return microphoneTokens == systemTokens
+                        && (-0.04...0.40).contains(startDelay)
+                }
+                return !compactEcho
+            }
+
+            let combinedSystemTokens = candidates.flatMap { normalizedTokens($0.text) }
+            let matched = longestCommonSubsequenceLength(
+                microphoneTokens,
+                combinedSystemTokens
+            )
+            let microphoneCoverage = Double(matched) / Double(microphoneTokens.count)
+            let startsTogether = candidates.contains {
+                abs(segment.startTime - $0.startTime) <= 0.65
+            }
+            let microphoneDuration = max(0.01, segment.endTime - segment.startTime)
+            let overlappingDuration = candidates.reduce(0.0) { total, candidate in
+                total + max(
+                    0,
+                    min(segment.endTime, candidate.endTime)
+                        - max(segment.startTime, candidate.startTime)
+                )
+            }
+            let temporalCoverage = min(1, overlappingDuration / microphoneDuration)
+            let sharesTiming = startsTogether || temporalCoverage >= 0.55
+            return !(microphoneCoverage >= 0.65 && sharesTiming)
+        }
+    }
+
     public static func markingCrossSourceOverlaps(
         in segments: [TranscriptSegment]
     ) -> [TranscriptSegment] {
@@ -132,5 +183,29 @@ public enum TranscriptAligner {
         if value == "You" { return value }
         let digits = value.filter(\.isNumber)
         return digits.isEmpty ? value : "Speaker \(digits)"
+    }
+
+    private static func normalizedTokens(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func longestCommonSubsequenceLength(
+        _ lhs: [String],
+        _ rhs: [String]
+    ) -> Int {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+        var previous = [Int](repeating: 0, count: rhs.count + 1)
+        for left in lhs {
+            var current = [Int](repeating: 0, count: rhs.count + 1)
+            for (index, right) in rhs.enumerated() {
+                current[index + 1] = left == right
+                    ? previous[index] + 1
+                    : max(previous[index + 1], current[index])
+            }
+            previous = current
+        }
+        return previous[rhs.count]
     }
 }

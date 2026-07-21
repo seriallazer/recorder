@@ -37,6 +37,16 @@ Because these are system-wide shortcuts, Recorder reserves the three configured 
 
 For compatible audio-only captures, **Echo cancellation: Auto** uses Apple's on-device voice processing to remove speaker playback from the default microphone before the stems are mixed. Automatic gain control is disabled and other-audio ducking is minimized so the local voice and meeting volume remain natural. Screen recording deliberately avoids live voice processing because it can reconfigure Core Audio underneath ScreenCaptureKit, delaying or failing capture. Instead, Auto analyzes representative sections of the completed system and microphone stems, estimates a stable leakage delay, and attenuates the matching system-audio activity in the microphone only when detection confidence is high. The cleaned microphone stem is used for the final movie and transcription. The original movie, audio, and microphone stem are retained as `*.pre-echo-cleanup.*` rollback files; cleanup Settings list them separately and never delete them without explicit opt-in. Detection or processing failures safely retain the raw recording. The recording manifest and Info popover report whether cancellation was actually applied. Set the option to **Off** in Settings to preserve raw microphone audio.
 
+Older screen recordings can be repaired on demand with the same guarded, non-destructive pipeline. Close or leave Recorder idle, then run:
+
+```sh
+scripts/repair-screen-echo.sh ~/Movies/Recorder/<recording-folder> --transcribe enhanced --expected-speakers 2
+```
+
+The command only accepts completed screen recordings, changes nothing when confidence is insufficient, keeps raw media and the previous transcript as `*.pre-echo-cleanup.*`, and can immediately regenerate the transcript from the cleaned microphone stem.
+
+If a cleaned legacy recording was already transcribed, `--clean-existing-transcript` applies only the conservative time-aligned cross-channel de-duplication pass and preserves the prior files as `transcript.pre-cross-channel-dedup.*`.
+
 ## Recording library
 
 Recorder defaults to `~/Movies/Recorder`. The location can be changed in Settings. Every recording has its own folder containing:
