@@ -1,6 +1,35 @@
 import Foundation
 import Combine
 
+public struct LibraryCleanupSummary: Sendable, Equatable {
+    public var temporaryItemCount: Int
+    public var temporaryBytes: Int64
+    public var rollbackItemCount: Int
+    public var rollbackBytes: Int64
+
+    public init(
+        temporaryItemCount: Int = 0,
+        temporaryBytes: Int64 = 0,
+        rollbackItemCount: Int = 0,
+        rollbackBytes: Int64 = 0
+    ) {
+        self.temporaryItemCount = temporaryItemCount
+        self.temporaryBytes = temporaryBytes
+        self.rollbackItemCount = rollbackItemCount
+        self.rollbackBytes = rollbackBytes
+    }
+}
+
+public struct LibraryCleanupResult: Sendable, Equatable {
+    public var removedItemCount: Int
+    public var reclaimedBytes: Int64
+
+    public init(removedItemCount: Int = 0, reclaimedBytes: Int64 = 0) {
+        self.removedItemCount = removedItemCount
+        self.reclaimedBytes = reclaimedBytes
+    }
+}
+
 @MainActor
 public final class RecordingLibrary: ObservableObject {
     @Published public private(set) var recordings: [RecordingManifest] = []
@@ -168,12 +197,132 @@ public final class RecordingLibrary: ObservableObject {
         Self.availableCapacity(at: rootURL)
     }
 
+    public var existingTags: [String] {
+        var seen: Set<String> = []
+        return recordings.compactMap(\.tag)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0.folding(options: [.caseInsensitive], locale: .current)).inserted }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    public func cleanupSummary() -> LibraryCleanupSummary {
+        let candidates = cleanupCandidates()
+        return LibraryCleanupSummary(
+            temporaryItemCount: candidates.temporary.count,
+            temporaryBytes: candidates.temporary.reduce(0) { $0 + $1.bytes },
+            rollbackItemCount: candidates.rollback.count,
+            rollbackBytes: candidates.rollback.reduce(0) { $0 + $1.bytes }
+        )
+    }
+
+    @discardableResult
+    public func cleanTemporaryFiles(includeRollbackMedia: Bool = false) throws -> LibraryCleanupResult {
+        let candidates = cleanupCandidates()
+        let selected = candidates.temporary + (includeRollbackMedia ? candidates.rollback : [])
+        var result = LibraryCleanupResult()
+        for candidate in selected {
+            guard fileManager.fileExists(atPath: candidate.url.path) else { continue }
+            try fileManager.removeItem(at: candidate.url)
+            result.removedItemCount += 1
+            result.reclaimedBytes += candidate.bytes
+        }
+        return result
+    }
+
     public func recoverInterruptedRecordings() {
         for var recording in recordings where [.previewing, .recording, .finalizing, .transcribing].contains(recording.state) {
             recording.state = .failed
             recording.errorMessage = "The app closed before this operation completed. Recoverable source files remain in the working folder."
             try? save(recording)
         }
+    }
+
+    private struct CleanupCandidate {
+        var url: URL
+        var bytes: Int64
+    }
+
+    private func cleanupCandidates() -> (
+        temporary: [CleanupCandidate],
+        rollback: [CleanupCandidate]
+    ) {
+        var temporary: [CleanupCandidate] = []
+        var rollback: [CleanupCandidate] = []
+
+        for recording in recordings where recording.state == .ready {
+            let folder = folderURL(for: recording.id)
+            let working = folder.appendingPathComponent("working", isDirectory: true)
+            if fileManager.fileExists(atPath: working.path),
+               !recordingReferencesPath(recording, path: working, folder: folder) {
+                temporary.append(CleanupCandidate(url: working, bytes: allocatedSize(at: working)))
+            }
+
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: []
+            ) else { continue }
+
+            for entry in entries where entry != working {
+                let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+                let name = entry.lastPathComponent
+                if isRecognizedTemporaryFile(name) {
+                    temporary.append(CleanupCandidate(url: entry, bytes: allocatedSize(at: entry)))
+                } else if name.contains(".pre-echo-cleanup.") {
+                    rollback.append(CleanupCandidate(url: entry, bytes: allocatedSize(at: entry)))
+                }
+            }
+        }
+        return (temporary, rollback)
+    }
+
+    private func recordingReferencesPath(
+        _ recording: RecordingManifest,
+        path: URL,
+        folder: URL
+    ) -> Bool {
+        let referencedFiles = [
+            recording.mediaFile,
+            recording.audioFile,
+            recording.microphoneStemFile,
+            recording.systemStemFile,
+            recording.transcriptFile,
+            recording.thumbnailFile
+        ].compactMap { $0 }
+        let pathPrefix = normalizedFilesystemPath(path) + "/"
+        return referencedFiles.contains { relativePath in
+            normalizedFilesystemPath(folder.appendingPathComponent(relativePath)).hasPrefix(pathPrefix)
+        }
+    }
+
+    private func isRecognizedTemporaryFile(_ name: String) -> Bool {
+        name.hasPrefix(".") && (name.contains(".tmp.") || name.hasSuffix(".tmp"))
+    }
+
+    private func allocatedSize(at url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .fileAllocatedSizeKey,
+            .totalFileAllocatedSizeKey,
+            .fileSizeKey
+        ]
+        if let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true {
+            return Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0)
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsPackageDescendants]
+        ) else { return 0 }
+        var size: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            size += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0)
+        }
+        return size
     }
 
     private func restoreBookmark() {

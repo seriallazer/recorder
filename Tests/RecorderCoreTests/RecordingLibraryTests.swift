@@ -126,6 +126,72 @@ final class RecordingLibraryTests: XCTestCase {
         XCTAssertEqual(library.folderURL(for: manifest.id), folder)
     }
 
+    func testExistingTagsAreUniqueAndCaseInsensitiveSorted() throws {
+        let (library, defaults, suite, root) = try makeLibrary()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try library.setRootURL(root)
+        let (first, _) = try library.create(configuration: CaptureConfiguration(mode: .audio))
+        let (second, _) = try library.create(configuration: CaptureConfiguration(mode: .audio))
+        let (third, _) = try library.create(configuration: CaptureConfiguration(mode: .audio))
+        _ = try library.rename(first, title: "First", tag: "System Design")
+        _ = try library.rename(second, title: "Second", tag: "mocks")
+        _ = try library.rename(third, title: "Third", tag: "Mocks")
+
+        XCTAssertEqual(library.existingTags.count, 2)
+        XCTAssertEqual(library.existingTags.map { $0.lowercased() }, ["mocks", "system design"])
+    }
+
+    func testCleanupOnlyRemovesRecognizedCompletedRecordingLeftovers() throws {
+        let (library, defaults, suite, root) = try makeLibrary()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try library.setRootURL(root)
+        var (ready, readyFolder) = try library.create(configuration: CaptureConfiguration(mode: .screen))
+        ready.state = .ready
+        ready.mediaFile = "recording.mov"
+        let activeMedia = readyFolder.appendingPathComponent("recording.mov")
+        let temporaryMedia = readyFolder.appendingPathComponent(".recording.tmp.mov")
+        let rollbackMedia = readyFolder.appendingPathComponent("recording.pre-echo-cleanup.mov")
+        let working = readyFolder.appendingPathComponent("working", isDirectory: true)
+        let workingFile = working.appendingPathComponent("capture-part.mov")
+        try Data(repeating: 1, count: 512).write(to: activeMedia)
+        try Data(repeating: 2, count: 256).write(to: temporaryMedia)
+        try Data(repeating: 3, count: 384).write(to: rollbackMedia)
+        try Data(repeating: 4, count: 128).write(to: workingFile)
+        try library.save(ready, in: readyFolder)
+
+        var (failed, failedFolder) = try library.create(configuration: CaptureConfiguration(mode: .screen))
+        failed.state = .failed
+        let recoveryFile = failedFolder
+            .appendingPathComponent("working", isDirectory: true)
+            .appendingPathComponent("recoverable.mov")
+        try Data(repeating: 5, count: 640).write(to: recoveryFile)
+        try library.save(failed, in: failedFolder)
+
+        let summary = library.cleanupSummary()
+        XCTAssertEqual(summary.temporaryItemCount, 2)
+        XCTAssertGreaterThan(summary.temporaryBytes, 0)
+        XCTAssertEqual(summary.rollbackItemCount, 1)
+        XCTAssertGreaterThan(summary.rollbackBytes, 0)
+
+        let safeResult = try library.cleanTemporaryFiles()
+        XCTAssertEqual(safeResult.removedItemCount, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeMedia.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryMedia.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: working.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rollbackMedia.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryFile.path))
+
+        let rollbackResult = try library.cleanTemporaryFiles(includeRollbackMedia: true)
+        XCTAssertEqual(rollbackResult.removedItemCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rollbackMedia.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeMedia.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryFile.path))
+    }
+
     func testEffectiveTrimRangeIsClamped() {
         let config = CaptureConfiguration(mode: .audio)
         var manifest = RecordingManifest(title: "Test", mode: .audio, configuration: config)

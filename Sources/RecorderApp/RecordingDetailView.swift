@@ -35,7 +35,10 @@ struct RecordingDetailView: View {
             load()
         }
         .sheet(isPresented: $showingRename) {
-            RecordingIdentityEditor(recording: recording) { title, tag in
+            RecordingIdentityEditor(
+                recording: recording,
+                existingTags: library.existingTags
+            ) { title, tag in
                 do {
                     try library.rename(recording, title: title, tag: tag)
                     return true
@@ -532,18 +535,43 @@ private struct RecordingInfoPopover: View {
 }
 
 private struct RecordingIdentityEditor: View {
+    private enum TagChoice: Hashable {
+        case none
+        case existing(String)
+        case new
+    }
+
     @Environment(\.dismiss) private var dismiss
     let recording: RecordingManifest
+    let existingTags: [String]
     let onSave: (String, String?) -> Bool
 
     @State private var title: String
-    @State private var tag: String
+    @State private var tagChoice: TagChoice
+    @State private var newTag: String
 
-    init(recording: RecordingManifest, onSave: @escaping (String, String?) -> Bool) {
+    init(
+        recording: RecordingManifest,
+        existingTags: [String],
+        onSave: @escaping (String, String?) -> Bool
+    ) {
         self.recording = recording
+        self.existingTags = existingTags
         self.onSave = onSave
         _title = State(initialValue: recording.title)
-        _tag = State(initialValue: recording.tag ?? "")
+        let currentTag = recording.tag?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if currentTag.isEmpty {
+            _tagChoice = State(initialValue: .none)
+            _newTag = State(initialValue: "")
+        } else if let matchingTag = existingTags.first(where: {
+            $0.localizedCaseInsensitiveCompare(currentTag) == .orderedSame
+        }) {
+            _tagChoice = State(initialValue: .existing(matchingTag))
+            _newTag = State(initialValue: "")
+        } else {
+            _tagChoice = State(initialValue: .new)
+            _newTag = State(initialValue: currentTag)
+        }
     }
 
     var body: some View {
@@ -553,7 +581,17 @@ private struct RecordingIdentityEditor: View {
 
             Form {
                 TextField("Title", text: $title)
-                TextField("Tag (optional)", text: $tag)
+                Picker("Tag", selection: $tagChoice) {
+                    Text("No Tag").tag(TagChoice.none)
+                    ForEach(existingTags, id: \.self) { tag in
+                        Text(tag).tag(TagChoice.existing(tag))
+                    }
+                    Divider()
+                    Text("Add New Tag…").tag(TagChoice.new)
+                }
+                if tagChoice == .new {
+                    TextField("New Tag", text: $newTag)
+                }
             }
             .formStyle(.grouped)
 
@@ -574,13 +612,15 @@ private struct RecordingIdentityEditor: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                 Button("Save") {
-                    let normalizedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if onSave(title, normalizedTag.isEmpty ? nil : normalizedTag) {
+                    if onSave(title, effectiveTag) {
                         dismiss()
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || (tagChoice == .new && effectiveTag == nil)
+                )
             }
         }
         .padding(24)
@@ -591,10 +631,20 @@ private struct RecordingIdentityEditor: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmm"
         let name = sanitized("\(formatter.string(from: recording.createdAt))_\(title)")
-        let normalizedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalizedTag.isEmpty
-            ? "Recorder / \(name)"
-            : "Recorder / \(sanitized(normalizedTag)) / \(name)"
+        return effectiveTag.map { "Recorder / \(sanitized($0)) / \(name)" }
+            ?? "Recorder / \(name)"
+    }
+
+    private var effectiveTag: String? {
+        switch tagChoice {
+        case .none:
+            return nil
+        case .existing(let tag):
+            return tag
+        case .new:
+            let normalized = newTag.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? nil : normalized
+        }
     }
 
     private func sanitized(_ value: String) -> String {

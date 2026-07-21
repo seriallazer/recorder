@@ -9,26 +9,55 @@ struct ContentView: View {
     @State private var selection: UUID?
     @State private var setupMode: RecordingMode?
     @State private var pendingDeletion: RecordingManifest?
+    @State private var tagFilter = ""
 
     var selectedRecording: RecordingManifest? {
         library.recordings.first { $0.id == selection }
     }
 
+    private var visibleRecordings: [RecordingManifest] {
+        guard !tagFilter.isEmpty else { return library.recordings }
+        return library.recordings.filter {
+            $0.tag?.localizedCaseInsensitiveCompare(tagFilter) == .orderedSame
+        }
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
-                ForEach(library.recordings) { recording in
-                    RecordingRow(recording: recording)
-                        .tag(recording.id)
-                        .contextMenu {
-                            Button("Reveal in Finder") { reveal(recording) }
-                            Button("Transcribe Again") { coordinator.transcribe(recording) }
-                            Divider()
-                            Button("Delete Recording Folder…", role: .destructive) {
-                                pendingDeletion = recording
-                            }
-                            .disabled(!canDelete(recording))
+            VStack(spacing: 0) {
+                HStack {
+                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Filter by tag", selection: $tagFilter) {
+                        Text("All Tags").tag("")
+                        ForEach(library.existingTags, id: \.self) { tag in
+                            Text(tag).tag(tag)
                         }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 170, alignment: .trailing)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                Divider()
+
+                List(selection: $selection) {
+                    ForEach(visibleRecordings) { recording in
+                        RecordingRow(recording: recording)
+                            .tag(recording.id)
+                            .contextMenu {
+                                Button("Reveal in Finder") { reveal(recording) }
+                                Button("Transcribe Again") { coordinator.transcribe(recording) }
+                                Divider()
+                                Button("Delete Recording Folder…", role: .destructive) {
+                                    pendingDeletion = recording
+                                }
+                                .disabled(!canDelete(recording))
+                            }
+                    }
                 }
             }
             .navigationTitle("Recordings")
@@ -73,16 +102,27 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .newScreenRecording)) { _ in setupMode = .screen }
         .onReceive(NotificationCenter.default.publisher(for: .importAudioFile)) { _ in importAudioFile() }
         .onChange(of: library.recordings) { _, recordings in
-            if let selection, recordings.contains(where: { $0.id == selection }) { return }
-            selection = recordings.first?.id
+            if !tagFilter.isEmpty,
+               !library.existingTags.contains(where: {
+                   $0.localizedCaseInsensitiveCompare(tagFilter) == .orderedSame
+               }) {
+                tagFilter = ""
+            }
+            if let selection, visibleRecordings.contains(where: { $0.id == selection }) { return }
+            selection = visibleRecordings.first?.id
+        }
+        .onChange(of: tagFilter) { _, _ in
+            if let selection, visibleRecordings.contains(where: { $0.id == selection }) { return }
+            selection = visibleRecordings.first?.id
         }
         .onChange(of: coordinator.activeRecording?.id) { _, activeRecordingID in
             if let activeRecordingID {
+                tagFilter = ""
                 selection = activeRecordingID
             }
         }
         .task {
-            if selection == nil { selection = library.recordings.first?.id }
+            if selection == nil { selection = visibleRecordings.first?.id }
         }
         .alert("Recorder", isPresented: Binding(
             get: { coordinator.presentedError != nil },
@@ -132,7 +172,7 @@ struct ContentView: View {
         do {
             try library.delete(recording)
             if selection == recording.id {
-                selection = library.recordings.first?.id
+                selection = visibleRecordings.first?.id
             }
         } catch {
             coordinator.presentedError = "Could not delete the recording folder: \(error.localizedDescription)"

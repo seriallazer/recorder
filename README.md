@@ -49,6 +49,8 @@ Recorder defaults to `~/Movies/Recorder`. The location can be changed in Setting
 - a thumbnail for video recordings
 - a `working` directory retained if capture or finalization is interrupted
 
+The sidebar can be filtered by any existing tag. **Rename & Tag** offers the current tag list as well as an **Add New Tag…** option; organization links are updated without moving the canonical media folder. Settings also reports disposable library items and provides a confirmed cleanup action. Cleanup excludes active, failed, and recoverable recordings plus all current media, manifests, stems, transcripts, thumbnails, and exports. Preserved pre-echo-cleanup originals are listed separately and are deleted only when explicitly selected.
+
 ## Local models
 
 FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model. Auto or Enhanced mode downloads the offline speaker models on first use; later runs use the local cache.

@@ -21,6 +21,10 @@ struct SettingsView: View {
     @State private var shortcutSet = RecorderShortcutPreferences.shortcuts()
     @State private var shortcutSaveMessage: String?
     @State private var shortcutSaveFailed = false
+    @State private var cleanupSummary = LibraryCleanupSummary()
+    @State private var includeRollbackMedia = false
+    @State private var showingCleanupConfirmation = false
+    @State private var cleanupMessage: String?
 
     var body: some View {
         Form {
@@ -32,6 +36,36 @@ struct SettingsView: View {
                 }
                 Text("Original recordings, audio companions, manifests, and transcripts are stored here.")
                     .font(.caption).foregroundStyle(.secondary)
+
+                Divider()
+                LabeledContent("Safe temporary items") {
+                    Text("\(cleanupSummary.temporaryItemCount) • \(bytes(cleanupSummary.temporaryBytes))")
+                }
+                if cleanupSummary.rollbackItemCount > 0 {
+                    Toggle(isOn: $includeRollbackMedia) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Also remove echo-cleanup originals")
+                            Text("\(cleanupSummary.rollbackItemCount) rollback files • \(bytes(cleanupSummary.rollbackBytes))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                HStack {
+                    Button("Refresh Cleanup Size") { refreshCleanupSummary() }
+                    Button("Delete Selected Items…", role: .destructive) {
+                        showingCleanupConfirmation = true
+                    }
+                    .disabled(selectedCleanupItemCount == 0)
+                    if let cleanupMessage {
+                        Text(cleanupMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Safe cleanup excludes active, failed, or recoverable recordings and never removes manifests, current media, stems, transcripts, thumbnails, or exports. Echo-cleanup originals are removed only when selected above.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Privacy") {
                 Label("Transcription and speaker detection run locally.", systemImage: "lock.shield")
@@ -126,8 +160,22 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 620, height: 650)
-        .alert("Could Not Change Library", isPresented: Binding(
+        .frame(width: 640, height: 700)
+        .task { refreshCleanupSummary() }
+        .onChange(of: library.rootURL) { _, _ in refreshCleanupSummary() }
+        .confirmationDialog(
+            "Delete Selected Temporary Items?",
+            isPresented: $showingCleanupConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(selectedCleanupItemCount) Items", role: .destructive) {
+                cleanTemporaryFiles()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This reclaims about \(bytes(selectedCleanupBytes)). Completed-recording leftovers will be deleted permanently. Your current media and transcripts are not included.")
+        }
+        .alert("Recorder Settings", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(error ?? "") }
     }
@@ -164,6 +212,37 @@ struct SettingsView: View {
         panel.directoryURL = library.rootURL
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try library.setRootURL(url) } catch { self.error = error.localizedDescription }
+    }
+
+    private var selectedCleanupItemCount: Int {
+        cleanupSummary.temporaryItemCount
+            + (includeRollbackMedia ? cleanupSummary.rollbackItemCount : 0)
+    }
+
+    private var selectedCleanupBytes: Int64 {
+        cleanupSummary.temporaryBytes
+            + (includeRollbackMedia ? cleanupSummary.rollbackBytes : 0)
+    }
+
+    private func refreshCleanupSummary() {
+        cleanupSummary = library.cleanupSummary()
+        if cleanupSummary.rollbackItemCount == 0 {
+            includeRollbackMedia = false
+        }
+    }
+
+    private func cleanTemporaryFiles() {
+        do {
+            let result = try library.cleanTemporaryFiles(includeRollbackMedia: includeRollbackMedia)
+            cleanupMessage = "Removed \(result.removedItemCount) items • \(bytes(result.reclaimedBytes))"
+            refreshCleanupSummary()
+        } catch {
+            self.error = "Could not clean temporary files: \(error.localizedDescription)"
+        }
+    }
+
+    private func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 }
 
