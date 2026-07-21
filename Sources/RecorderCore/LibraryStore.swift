@@ -109,7 +109,7 @@ public final class RecordingLibrary: ObservableObject {
         // Use the library's newest copy rather than a potentially stale view value. This
         // prevents an identity edit from racing a recording or transcription state change.
         let current = recordings.first(where: { $0.id == manifest.id }) ?? manifest
-        guard ![.recording, .finalizing, .transcribing].contains(current.state) else {
+        guard ![.previewing, .recording, .finalizing, .transcribing].contains(current.state) else {
             throw RecorderError.invalidState("Wait for recording or transcription to finish before renaming it.")
         }
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -169,7 +169,7 @@ public final class RecordingLibrary: ObservableObject {
     }
 
     public func recoverInterruptedRecordings() {
-        for var recording in recordings where [.recording, .finalizing, .transcribing].contains(recording.state) {
+        for var recording in recordings where [.previewing, .recording, .finalizing, .transcribing].contains(recording.state) {
             recording.state = .failed
             recording.errorMessage = "The app closed before this operation completed. Recoverable source files remain in the working folder."
             try? save(recording)

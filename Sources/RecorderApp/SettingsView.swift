@@ -45,7 +45,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Auto uses Apple's voice processing when microphone and system audio are recorded together on the Mac's default input and output. If it is unavailable, Recorder safely keeps the original microphone path. Off preserves completely raw microphone audio.")
+                Text("Auto uses Apple's voice processing for compatible audio-only captures. Screen recording keeps stable, separate raw microphone and system tracks because live voice processing can conflict with ScreenCaptureKit. Off preserves completely raw microphone audio.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

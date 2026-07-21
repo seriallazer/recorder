@@ -22,6 +22,8 @@ public final class RecordingCoordinator: ObservableObject {
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var diskStopTriggered = false
     private var stopInProgress = false
+    private var startInProgress = false
+    private var stopRequestedDuringStart = false
 
     private lazy var transcriber = LocalTranscriptionService { [weak self] phase, fraction in
         Task { @MainActor in
@@ -56,18 +58,26 @@ public final class RecordingCoordinator: ObservableObject {
     }
 
     public func start(configuration: CaptureConfiguration) async {
-        guard activeCapture == nil, !stopInProgress else {
+        guard activeCapture == nil, !startInProgress, !stopInProgress else {
             presentedError = "Stop the current recording before starting another."
             return
         }
+        startInProgress = true
+        stopRequestedDuringStart = false
         do {
             let (manifest, folder) = try library.create(configuration: configuration)
             var recording = manifest
-            recording.state = .recording
+            recording.state = .previewing
             recording.errorMessage = nil
             try library.save(recording, in: folder)
 
             let capture = captureFactory(configuration.mode)
+            activeCapture = capture
+            activeFolder = folder
+            activeRecording = recording
+            elapsedTime = 0
+            startDate = nil
+            diskStopTriggered = false
             let working = folder.appendingPathComponent("working", isDirectory: true)
             do {
                 _ = try await capture.start(configuration: configuration, workingDirectory: working)
@@ -80,22 +90,31 @@ public final class RecordingCoordinator: ObservableObject {
                 try? library.save(recording, in: folder)
                 throw error
             }
-            activeCapture = capture
-            activeFolder = folder
+            recording.state = .recording
+            try library.save(recording, in: folder)
             activeRecording = recording
-            elapsedTime = 0
             startDate = Date()
-            diskStopTriggered = false
             startTimer()
+            startInProgress = false
+            if stopRequestedDuringStart {
+                stopRequestedDuringStart = false
+                await stop()
+            }
         } catch {
             presentedError = error.localizedDescription
-            activeCapture = nil
-            activeFolder = nil
-            activeRecording = nil
+            clearActiveRecording()
         }
     }
 
     public func stop() async {
+        if startInProgress {
+            stopRequestedDuringStart = true
+            if var recording = activeRecording {
+                recording.state = .finalizing
+                activeRecording = recording
+            }
+            return
+        }
         guard !stopInProgress else { return }
         guard let capture = activeCapture,
               let folder = activeFolder,
@@ -375,5 +394,7 @@ public final class RecordingCoordinator: ObservableObject {
         elapsedTime = 0
         audioLevel = 0
         diskStopTriggered = false
+        startInProgress = false
+        stopRequestedDuringStart = false
     }
 }

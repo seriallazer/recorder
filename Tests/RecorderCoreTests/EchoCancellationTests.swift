@@ -23,7 +23,7 @@ final class EchoCancellationTests: XCTestCase {
         )
     }
 
-    func testAutomaticPolicyRequiresDualSourceCaptureAndDefaultMicrophone() {
+    func testAutomaticPolicyAvoidsScreenCaptureAudioDeviceConflict() {
         let eligible = CaptureConfiguration(
             mode: .screen,
             microphoneID: "default-mic",
@@ -31,12 +31,18 @@ final class EchoCancellationTests: XCTestCase {
             capturesMicrophone: true,
             echoCancellationMode: .automatic
         )
-        XCTAssertTrue(EchoCancellationPolicy.shouldAttempt(
+        XCTAssertFalse(EchoCancellationPolicy.shouldAttempt(
             configuration: eligible,
             defaultMicrophoneID: "default-mic"
         ))
 
         var configuration = eligible
+        configuration.mode = .audio
+        XCTAssertTrue(EchoCancellationPolicy.shouldAttempt(
+            configuration: configuration,
+            defaultMicrophoneID: "default-mic"
+        ))
+
         configuration.microphoneID = "external-mic"
         XCTAssertFalse(EchoCancellationPolicy.shouldAttempt(
             configuration: configuration,

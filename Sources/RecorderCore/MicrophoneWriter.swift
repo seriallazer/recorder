@@ -7,6 +7,7 @@ public enum EchoCancellationPolicy {
         defaultMicrophoneID: String?
     ) -> Bool {
         guard configuration.echoCancellationMode == .automatic,
+              configuration.mode != .screen,
               configuration.capturesSystemAudio,
               configuration.capturesMicrophone,
               let defaultMicrophoneID else { return false }

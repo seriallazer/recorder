@@ -10,7 +10,7 @@ struct ActiveRecordingBanner: View {
         HStack(spacing: 14) {
             Circle().fill(.red).frame(width: 12, height: 12)
             VStack(alignment: .leading, spacing: 2) {
-                Text(recording.state == .finalizing ? "Finalizing recording…" : "Recording \(recording.mode.displayName.lowercased())")
+                Text(statusText)
                     .fontWeight(.semibold)
                 Text(TranscriptDocument.timestamp(coordinator.elapsedTime))
                     .font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
@@ -35,6 +35,14 @@ struct ActiveRecordingBanner: View {
         }
         .padding(12)
         .background(.red.opacity(0.07))
+    }
+
+    private var statusText: String {
+        switch recording.state {
+        case .previewing: "Starting \(recording.mode.displayName.lowercased()) recording…"
+        case .finalizing: "Finalizing recording…"
+        default: "Recording \(recording.mode.displayName.lowercased())"
+        }
     }
 }
 

@@ -339,12 +339,12 @@ struct RecordingDetailView: View {
 
     private var canDelete: Bool {
         coordinator.activeRecording?.id != recording.id
-            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+            && ![.previewing, .recording, .finalizing, .transcribing].contains(recording.state)
     }
 
     private var canRename: Bool {
         coordinator.activeRecording?.id != recording.id
-            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+            && ![.previewing, .recording, .finalizing, .transcribing].contains(recording.state)
     }
 
     private var headerMetadata: String {

@@ -63,7 +63,10 @@ struct RecordingMenuBarContent: View {
     }
 
     private func statusText(for recording: RecordingManifest) -> String {
-        if recording.state == .finalizing { return "Finalizing recording…" }
-        return "Recording \(recording.mode.displayName.lowercased())"
+        switch recording.state {
+        case .previewing: "Starting \(recording.mode.displayName.lowercased()) recording…"
+        case .finalizing: "Finalizing recording…"
+        default: "Recording \(recording.mode.displayName.lowercased())"
+        }
     }
 }

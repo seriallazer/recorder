@@ -3,6 +3,38 @@ import XCTest
 
 @MainActor
 final class RecordingCoordinatorTests: XCTestCase {
+    func testStartingRecordingIsVisibleAndCanBeStoppedFromAnotherControl() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(root.path, forKey: "RecorderLibraryPath")
+        let library = RecordingLibrary(defaults: defaults)
+        let capture = GatedStartingCapture()
+        let coordinator = RecordingCoordinator(
+            library: library,
+            finalizer: PassthroughFinalizer(),
+            captureFactory: { _ in capture }
+        )
+
+        let startTask = Task {
+            await coordinator.start(configuration: CaptureConfiguration(mode: .screen))
+        }
+        for _ in 0..<20 where coordinator.activeRecording == nil {
+            await Task.yield()
+        }
+        XCTAssertEqual(coordinator.activeRecording?.state, .previewing)
+
+        await coordinator.stop()
+        XCTAssertEqual(coordinator.activeRecording?.state, .finalizing)
+        await capture.allowStart()
+        await startTask.value
+
+        XCTAssertNil(coordinator.activeRecording)
+        let stopCallCount = await capture.stopCallCount
+        XCTAssertEqual(stopCallCount, 1)
+    }
+
     func testConcurrentStopRequestsOnlyStopCaptureOnce() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -115,6 +147,37 @@ final class RecordingCoordinatorTests: XCTestCase {
         let range = await finalizer.exportedRange
         XCTAssertEqual(range?.start, 12.5)
         XCTAssertEqual(range?.end, 34.25)
+    }
+}
+
+private actor GatedStartingCapture: RecordingCapturing {
+    private(set) var stopCallCount = 0
+    private var startIsAllowed = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private let sourceURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("recorder-start-test-\(UUID().uuidString).mov")
+
+    func start(
+        configuration: CaptureConfiguration,
+        workingDirectory: URL
+    ) async throws -> CaptureArtifacts {
+        if !startIsAllowed {
+            await withCheckedContinuation { continuation in
+                startContinuation = continuation
+            }
+        }
+        return CaptureArtifacts(primaryMediaURL: sourceURL)
+    }
+
+    func allowStart() {
+        startIsAllowed = true
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func stop() async throws -> CaptureArtifacts {
+        stopCallCount += 1
+        return CaptureArtifacts(primaryMediaURL: sourceURL)
     }
 }
 

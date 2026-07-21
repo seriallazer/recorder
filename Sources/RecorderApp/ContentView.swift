@@ -120,7 +120,7 @@ struct ContentView: View {
 
     private func canDelete(_ recording: RecordingManifest) -> Bool {
         coordinator.activeRecording?.id != recording.id
-            && ![.recording, .finalizing, .transcribing].contains(recording.state)
+            && ![.previewing, .recording, .finalizing, .transcribing].contains(recording.state)
     }
 
     private func delete(_ recording: RecordingManifest) {
@@ -184,6 +184,14 @@ private struct RecordingRow: View {
                     Label("Transcribing", systemImage: "text.bubble")
                         .font(.caption2)
                         .foregroundStyle(.blue)
+                } else if recording.state == .previewing {
+                    Label("Starting", systemImage: "hourglass")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                } else if recording.state == .recording {
+                    Label("Recording", systemImage: "record.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
                 } else if recording.state == .failed {
                     Label("Needs attention", systemImage: "exclamationmark.triangle")
                         .font(.caption2)

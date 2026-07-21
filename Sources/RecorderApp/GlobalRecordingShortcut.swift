@@ -119,7 +119,7 @@ final class ShortcutRecordingController: ObservableObject {
 
     private let coordinator: RecordingCoordinator
     private let hotKey = GlobalHotKeyManager()
-    private var handlingShortcut = false
+    private var pendingStartMode: RecordingMode?
     private var defaultsObserver: NSObjectProtocol?
 
     init(coordinator: RecordingCoordinator) {
@@ -215,10 +215,6 @@ final class ShortcutRecordingController: ObservableObject {
     }
 
     private func toggleRecording(mode: RecordingMode) async {
-        guard !handlingShortcut else { return }
-        handlingShortcut = true
-        defer { handlingShortcut = false }
-
         switch RecorderShortcutPreferences.action(
             activeMode: coordinator.activeRecording?.mode,
             requestedMode: mode
@@ -236,6 +232,14 @@ final class ShortcutRecordingController: ObservableObject {
             break
         }
 
+        guard pendingStartMode == nil else {
+            coordinator.presentedError = "Recorder is already preparing a recording."
+            return
+        }
+        pendingStartMode = mode
+        defer {
+            if pendingStartMode == mode { pendingStartMode = nil }
+        }
         let configuration = RecorderShortcutPreferences.configuration(for: mode)
         guard await permissionsAreAvailable(for: configuration) else { return }
         await coordinator.start(configuration: configuration)
