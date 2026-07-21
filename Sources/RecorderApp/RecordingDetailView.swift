@@ -521,8 +521,13 @@ private struct RecordingInfoPopover: View {
     private var echoCancellationStatus: String? {
         guard recording.configuration.capturesSystemAudio,
               recording.configuration.capturesMicrophone else { return nil }
-        if recording.echoCancellationApplied == true { return "Applied" }
+        if recording.echoCancellationApplied == true {
+            return recording.mode == .screen ? "Applied after recording" : "Applied"
+        }
         if recording.configuration.echoCancellationMode == .off { return "Off" }
+        if recording.mode == .screen, recording.echoCancellationApplied == false {
+            return "Not applied — no confident echo detected"
+        }
         if recording.echoCancellationApplied == false {
             return "Unavailable — raw fallback"
         }

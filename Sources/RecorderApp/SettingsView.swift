@@ -79,7 +79,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Auto uses Apple's voice processing for compatible audio-only captures. Screen recording keeps stable, separate raw microphone and system tracks because live voice processing can conflict with ScreenCaptureKit. Off preserves completely raw microphone audio.")
+                Text("Auto uses Apple's voice processing for compatible audio-only captures. Screen recording keeps capture stable, then detects and removes speaker leakage from its separate tracks after recording. When cleanup is applied, the original movie, audio, and microphone track are retained as rollback files. Off preserves completely raw microphone audio.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
