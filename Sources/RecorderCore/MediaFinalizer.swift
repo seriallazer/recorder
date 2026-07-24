@@ -259,6 +259,7 @@ public struct NativeMediaFinalizer: MediaFinalizing {
         try await ScreenEchoMediaProcessor.apply(
             plan: plan,
             sourceVideoURL: sourceVideoURL,
+            sourceMicrophoneURL: microphoneURL,
             recordingURL: recordingURL,
             audioURL: audioURL,
             microphoneURL: microphoneURL,

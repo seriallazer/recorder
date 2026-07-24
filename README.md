@@ -47,6 +47,10 @@ The command only accepts completed screen recordings, changes nothing when confi
 
 If a cleaned legacy recording was already transcribed, `--clean-existing-transcript` applies only the conservative time-aligned cross-channel de-duplication pass and preserves the prior files as `transcript.pre-cross-channel-dedup.*`.
 
+Use `--reprocess` to rebuild an already-cleaned recording from its preserved raw
+movie and microphone stem after cleanup improvements. The original rollback
+files are read-only inputs and are never replaced.
+
 ## Recording library
 
 Recorder defaults to `~/Movies/Recorder`. The location can be changed in Settings. Every recording has its own folder containing:

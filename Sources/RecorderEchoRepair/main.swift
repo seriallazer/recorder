@@ -22,6 +22,7 @@ struct RecorderEchoRepairCommand {
         var transcriptionMode: DiarizationMode?
         var expectedSpeakers = 2
         var cleanExistingTranscript = false
+        var reprocessFromOriginals = false
         var index = 1
         while index < arguments.count {
             switch arguments[index] {
@@ -45,6 +46,12 @@ struct RecorderEchoRepairCommand {
                 }
                 cleanExistingTranscript = true
                 index += 1
+            case "--reprocess":
+                guard !reprocessFromOriginals else {
+                    throw CommandError.invalidArgument("--reprocess may only be supplied once.")
+                }
+                reprocessFromOriginals = true
+                index += 1
             default:
                 throw CommandError.invalidArgument("Unknown argument: \(arguments[index])")
             }
@@ -56,7 +63,10 @@ struct RecorderEchoRepairCommand {
         }
 
         log("Analyzing \(folder.path)…")
-        let repair = try await ScreenEchoRepairService().repair(folder: folder)
+        let repair = try await ScreenEchoRepairService().repair(
+            folder: folder,
+            reprocessFromOriginals: reprocessFromOriginals
+        )
         if repair.alreadyClean {
             log("Echo cleanup was already applied; active media was left unchanged.")
         } else if repair.applied {
@@ -249,7 +259,7 @@ private enum CommandError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .usage:
-            "Usage: repair-screen-echo.sh <recording-folder> [--transcribe automatic|stable|enhanced] [--expected-speakers 2-6] [--clean-existing-transcript]"
+            "Usage: repair-screen-echo.sh <recording-folder> [--reprocess] [--transcribe automatic|stable|enhanced] [--expected-speakers 2-6] [--clean-existing-transcript]"
         case .invalidArgument(let message):
             message
         }

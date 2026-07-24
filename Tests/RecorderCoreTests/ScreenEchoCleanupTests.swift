@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import Accelerate
 @testable import RecorderCore
 
 final class ScreenEchoCleanupTests: XCTestCase {
@@ -48,6 +49,19 @@ final class ScreenEchoCleanupTests: XCTestCase {
         XCTAssertEqual(intervals[0].end, 0.58, accuracy: 0.001)
         XCTAssertEqual(intervals[1].start, 1.08, accuracy: 0.001)
         XCTAssertEqual(intervals[1].end, 1.38, accuracy: 0.001)
+    }
+
+    func testDuckingIntervalsIncludeQuietDigitalSpeech() {
+        let intervals = ScreenEchoCleanupAnalyzer.duckingIntervals(
+            rmsFrames: [0, 0.003, 0.004, 0.003, 0],
+            frameDuration: 0.1,
+            delay: 0.08,
+            totalDuration: 1
+        )
+
+        XCTAssertEqual(intervals.count, 1)
+        XCTAssertEqual(intervals[0].start, 0.18, accuracy: 0.001)
+        XCTAssertEqual(intervals[0].end, 0.48, accuracy: 0.001)
     }
 
     func testAutomaticScreenCleanupPreservesOriginalsAndReturnsPlayableMedia() async throws {
@@ -108,6 +122,48 @@ final class ScreenEchoCleanupTests: XCTestCase {
         XCTAssertGreaterThan(finalized.duration, 9.5)
         let audioTracks = try await AVURLAsset(url: finalized.mediaURL).loadTracks(withMediaType: .audio)
         XCTAssertFalse(audioTracks.isEmpty)
+
+        let rawMicrophoneURL = destination.appendingPathComponent(
+            "microphone.pre-echo-cleanup.m4a"
+        )
+        let cleanedMicrophoneURL = try XCTUnwrap(finalized.microphoneStemURL)
+        let rawActiveSpeechRMS = try rms(
+            in: rawMicrophoneURL,
+            start: 0.2,
+            duration: 0.3
+        )
+        let cleanedActiveSpeechRMS = try rms(
+            in: cleanedMicrophoneURL,
+            start: 0.2,
+            duration: 0.3
+        )
+        XCTAssertLessThan(cleanedActiveSpeechRMS, rawActiveSpeechRMS * 0.08)
+
+        var manifest = RecordingManifest(
+            title: "Screen",
+            mode: .screen,
+            state: .ready,
+            configuration: CaptureConfiguration(mode: .screen)
+        )
+        manifest.duration = finalized.duration
+        manifest.mediaFile = finalized.mediaURL.lastPathComponent
+        manifest.audioFile = finalized.audioURL.lastPathComponent
+        manifest.microphoneStemFile = cleanedMicrophoneURL.lastPathComponent
+        manifest.systemStemFile = try XCTUnwrap(finalized.systemStemURL).lastPathComponent
+        manifest.echoCancellationApplied = true
+        try JSONEncoder.recorder.encode(manifest).write(
+            to: destination.appendingPathComponent("manifest.json")
+        )
+        let preservedRawMicrophone = try Data(contentsOf: rawMicrophoneURL)
+
+        let reprocessed = try await ScreenEchoRepairService().repair(
+            folder: destination,
+            reprocessFromOriginals: true
+        )
+
+        XCTAssertTrue(reprocessed.applied)
+        XCTAssertFalse(reprocessed.alreadyClean)
+        XCTAssertEqual(try Data(contentsOf: rawMicrophoneURL), preservedRawMicrophone)
     }
 
     func testAutomaticScreenCleanupLeavesUnrelatedTracksUntouched() async throws {
@@ -240,5 +296,33 @@ final class ScreenEchoCleanupTests: XCTestCase {
             destination[index] = sample
         }
         try file.write(from: buffer)
+    }
+
+    private func rms(
+        in url: URL,
+        start: TimeInterval,
+        duration: TimeInterval
+    ) throws -> Float {
+        let file = try AVAudioFile(forReading: url)
+        let sampleRate = file.processingFormat.sampleRate
+        file.framePosition = AVAudioFramePosition((start * sampleRate).rounded())
+        let frameCount = AVAudioFrameCount((duration * sampleRate).rounded())
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: frameCount
+        ))
+        try file.read(into: buffer, frameCount: frameCount)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return 0 }
+        var energy: Float = 0
+        for channel in 0..<Int(file.processingFormat.channelCount) {
+            var channelEnergy: Float = 0
+            vDSP_svesq(channels[channel], 1, &channelEnergy, vDSP_Length(count))
+            energy += channelEnergy
+        }
+        return sqrt(
+            energy / Float(count * Int(file.processingFormat.channelCount))
+        )
     }
 }

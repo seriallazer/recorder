@@ -5,7 +5,7 @@ ROOT="${0:A:h:h}"
 cd "$ROOT"
 
 if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <recording-folder> [--transcribe automatic|stable|enhanced] [--expected-speakers 2-6] [--clean-existing-transcript]" >&2
+    echo "Usage: $0 <recording-folder> [--reprocess] [--transcribe automatic|stable|enhanced] [--expected-speakers 2-6] [--clean-existing-transcript]" >&2
     exit 2
 fi
 

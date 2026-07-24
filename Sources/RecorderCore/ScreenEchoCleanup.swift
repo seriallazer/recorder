@@ -103,8 +103,11 @@ enum ScreenEchoCleanupAnalyzer {
     ) -> [EchoDuckingInterval] {
         guard !rmsFrames.isEmpty, frameDuration > 0, totalDuration > 0 else { return [] }
         let peak = rmsFrames.max() ?? 0
-        guard peak >= 0.008 else { return [] }
-        let threshold = max(0.008, min(0.02, peak * 0.18))
+        // ScreenCaptureKit's digital system stem has an effectively silent
+        // floor. The previous 0.008...0.02 threshold missed quieter speech,
+        // leaving whole interviewer phrases ungated in the microphone stem.
+        guard peak >= 0.002 else { return [] }
+        let threshold = max(0.002, min(0.008, peak * 0.08))
         let minimumActiveFrames = max(1, Int((0.06 / frameDuration).rounded(.up)))
         let mergeGapFrames = max(1, Int((0.24 / frameDuration).rounded(.up)))
 

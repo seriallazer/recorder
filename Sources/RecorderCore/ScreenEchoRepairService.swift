@@ -23,7 +23,10 @@ public struct ScreenEchoRepairResult: Sendable, Equatable {
 public struct ScreenEchoRepairService: Sendable {
     public init() {}
 
-    public func repair(folder: URL) async throws -> ScreenEchoRepairResult {
+    public func repair(
+        folder: URL,
+        reprocessFromOriginals: Bool = false
+    ) async throws -> ScreenEchoRepairResult {
         let manifestURL = folder.appendingPathComponent("manifest.json")
         let data = try Data(contentsOf: manifestURL)
         var manifest = try JSONDecoder.recorder.decode(RecordingManifest.self, from: data)
@@ -33,7 +36,7 @@ public struct ScreenEchoRepairService: Sendable {
         guard manifest.state == .ready else {
             throw RecorderError.invalidState("Wait until recording and transcription work has finished.")
         }
-        if manifest.echoCancellationApplied == true {
+        if manifest.echoCancellationApplied == true && !reprocessFromOriginals {
             return ScreenEchoRepairResult(applied: false, alreadyClean: true)
         }
         guard let recordingURL = manifest.fileURL(for: manifest.mediaFile, in: folder),
@@ -41,21 +44,32 @@ public struct ScreenEchoRepairService: Sendable {
               let systemURL = manifest.fileURL(for: manifest.systemStemFile, in: folder) else {
             throw RecorderError.missingMedia
         }
+        let sourceVideoURL: URL
+        let sourceMicrophoneURL: URL
+        if reprocessFromOriginals {
+            sourceVideoURL = folder.appendingPathComponent("recording.pre-echo-cleanup.mov")
+            sourceMicrophoneURL = folder.appendingPathComponent("microphone.pre-echo-cleanup.m4a")
+        } else {
+            sourceVideoURL = recordingURL
+            sourceMicrophoneURL = microphoneURL
+        }
         let audioURL = manifest.fileURL(for: manifest.audioFile, in: folder)
             ?? folder.appendingPathComponent("audio.m4a")
-        for url in [recordingURL, microphoneURL, systemURL] where !FileManager.default.fileExists(atPath: url.path) {
+        for url in [recordingURL, microphoneURL, systemURL, sourceVideoURL, sourceMicrophoneURL]
+        where !FileManager.default.fileExists(atPath: url.path) {
             throw RecorderError.missingMedia
         }
 
         guard let plan = try await ScreenEchoCleanupAnalyzer.makePlan(
             systemURL: systemURL,
-            microphoneURL: microphoneURL
+            microphoneURL: sourceMicrophoneURL
         ) else {
             return ScreenEchoRepairResult(applied: false)
         }
         try await ScreenEchoMediaProcessor.apply(
             plan: plan,
-            sourceVideoURL: recordingURL,
+            sourceVideoURL: sourceVideoURL,
+            sourceMicrophoneURL: sourceMicrophoneURL,
             recordingURL: recordingURL,
             audioURL: audioURL,
             microphoneURL: microphoneURL,
@@ -76,9 +90,15 @@ public struct ScreenEchoRepairService: Sendable {
 }
 
 enum ScreenEchoMediaProcessor {
+    // A delayed copy at 12% (-18 dB) remained clearly audible beside the
+    // full-volume system stem. Keep it below normal listening audibility while
+    // retaining short ramps to avoid clicks at speech boundaries.
+    static let suppressedMicrophoneVolume: Float = 0.01
+
     static func apply(
         plan: ScreenEchoCleanupPlan,
         sourceVideoURL: URL,
+        sourceMicrophoneURL: URL,
         recordingURL: URL,
         audioURL: URL,
         microphoneURL: URL,
@@ -99,7 +119,7 @@ enum ScreenEchoMediaProcessor {
         }
 
         try await exportDuckedMicrophone(
-            sourceURL: microphoneURL,
+            sourceURL: sourceMicrophoneURL,
             intervals: plan.duckingIntervals,
             destinationURL: cleanedMicrophone
         )
@@ -121,7 +141,7 @@ enum ScreenEchoMediaProcessor {
             throw RecorderError.finalizationFailed("Automatic echo cleanup produced invalid media.")
         }
 
-        try preserveCopyIfMissing(from: microphoneURL, to: originalMicrophone)
+        try preserveCopyIfMissing(from: sourceMicrophoneURL, to: originalMicrophone)
         try preserveCopyIfMissing(from: recordingURL, to: originalRecording)
         if fileManager.fileExists(atPath: audioURL.path) {
             try preserveCopyIfMissing(from: audioURL, to: originalAudio)
@@ -168,6 +188,7 @@ enum ScreenEchoMediaProcessor {
 
         let parameters = AVMutableAudioMixInputParameters(track: targetTrack)
         parameters.setVolume(1, at: .zero)
+        let suppressedVolume = suppressedMicrophoneVolume
         let totalDuration = max(0, duration.seconds)
         for interval in intervals {
             let attackStart = max(0, interval.start - 0.04)
@@ -177,19 +198,25 @@ enum ScreenEchoMediaProcessor {
             if attackEnd > attackStart {
                 parameters.setVolumeRamp(
                     fromStartVolume: 1,
-                    toEndVolume: 0.12,
+                    toEndVolume: suppressedVolume,
                     timeRange: CMTimeRange(
                         start: CMTime(seconds: attackStart, preferredTimescale: 48_000),
                         end: CMTime(seconds: attackEnd, preferredTimescale: 48_000)
                     )
                 )
             } else {
-                parameters.setVolume(0.12, at: CMTime(seconds: attackStart, preferredTimescale: 48_000))
+                parameters.setVolume(
+                    suppressedVolume,
+                    at: CMTime(seconds: attackStart, preferredTimescale: 48_000)
+                )
             }
-            parameters.setVolume(0.12, at: CMTime(seconds: releaseStart, preferredTimescale: 48_000))
+            parameters.setVolume(
+                suppressedVolume,
+                at: CMTime(seconds: releaseStart, preferredTimescale: 48_000)
+            )
             if releaseEnd > releaseStart {
                 parameters.setVolumeRamp(
-                    fromStartVolume: 0.12,
+                    fromStartVolume: suppressedVolume,
                     toEndVolume: 1,
                     timeRange: CMTimeRange(
                         start: CMTime(seconds: releaseStart, preferredTimescale: 48_000),
