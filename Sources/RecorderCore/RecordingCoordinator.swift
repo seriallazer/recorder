@@ -21,6 +21,7 @@ public final class RecordingCoordinator: ObservableObject {
     private var startDate: Date?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var diskStopTriggered = false
+    private var captureFailureStopTriggered = false
     private var stopInProgress = false
     private var startInProgress = false
     private var stopRequestedDuringStart = false
@@ -78,6 +79,7 @@ public final class RecordingCoordinator: ObservableObject {
             elapsedTime = 0
             startDate = nil
             diskStopTriggered = false
+            captureFailureStopTriggered = false
             let working = folder.appendingPathComponent("working", isDirectory: true)
             do {
                 _ = try await capture.start(configuration: configuration, workingDirectory: working)
@@ -369,6 +371,16 @@ public final class RecordingCoordinator: ObservableObject {
                 guard let self, let startDate = self.startDate else { return }
                 self.elapsedTime = Date().timeIntervalSince(startDate)
                 self.audioLevel = (self.activeCapture as? AudioLevelProviding)?.audioLevel ?? 0
+                if !self.captureFailureStopTriggered,
+                   let failure = (
+                    self.activeCapture as? CaptureHealthProviding
+                   )?.captureFailureDescription,
+                   self.activeRecording?.state == .recording {
+                    self.captureFailureStopTriggered = true
+                    self.presentedError =
+                        "Recording stopped because a capture encoder failed: \(failure)"
+                    Task { await self.stop() }
+                }
                 if !self.diskStopTriggered,
                    self.library.availableCapacity < 250 * 1_024 * 1_024,
                    self.activeRecording?.state == .recording {
@@ -394,6 +406,7 @@ public final class RecordingCoordinator: ObservableObject {
         elapsedTime = 0
         audioLevel = 0
         diskStopTriggered = false
+        captureFailureStopTriggered = false
         startInProgress = false
         stopRequestedDuringStart = false
     }

@@ -1,7 +1,10 @@
 import Foundation
 @preconcurrency import AVFoundation
 
-public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLevelProviding, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+public final class CameraCaptureService: NSObject, RecordingCapturing,
+    AudioLevelProviding, CaptureHealthProviding,
+    AVCaptureVideoDataOutputSampleBufferDelegate,
+    AVCaptureAudioDataOutputSampleBufferDelegate {
     public let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "Recorder.CameraCapture", qos: .userInitiated)
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -26,6 +29,19 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
         stateLock.lock()
         defer { stateLock.unlock() }
         return latestLevel
+    }
+
+    public var captureFailureDescription: String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if let writerStartError {
+            return writerStartError.localizedDescription
+        }
+        if writer?.status == .failed {
+            return writer?.error?.localizedDescription
+                ?? "The movie encoder stopped unexpectedly."
+        }
+        return nil
     }
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
@@ -71,13 +87,13 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
 
         var audioInput: AVAssetWriterInput?
         if configuration.capturesMicrophone {
-            let settings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 128_000
-            ]
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            let input = AVAssetWriterInput(
+                mediaType: .audio,
+                outputSettings: MicrophoneEncodingProfile.aacSettings(
+                    for: microphone
+                ),
+                sourceFormatHint: microphone?.activeFormat.formatDescription
+            )
             input.expectsMediaDataInRealTime = true
             guard writer.canAdd(input) else {
                 throw RecorderError.captureFailed("Camera audio encoder is unavailable.")
@@ -173,7 +189,13 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                ),
                videoInput?.isReadyForMoreMediaData == true,
                videoInput?.append(normalizedBuffer) == false {
-                setWriterState(started: true, error: writer.error)
+                setWriterState(
+                    started: true,
+                    error: writer.error
+                        ?? RecorderError.captureFailed(
+                            "The movie encoder rejected a video frame."
+                        )
+                )
             }
         } else if output === audioOutput {
             let level = AudioLevelMeter.normalizedLevel(from: sampleBuffer)
@@ -194,7 +216,13 @@ public final class CameraCaptureService: NSObject, RecordingCapturing, AudioLeve
                ),
                audioInput?.isReadyForMoreMediaData == true,
                audioInput?.append(normalizedBuffer) == false {
-                setWriterState(started: true, error: writer.error)
+                setWriterState(
+                    started: true,
+                    error: writer.error
+                        ?? RecorderError.captureFailed(
+                            "The movie encoder rejected a microphone sample."
+                        )
+                )
             }
         }
     }

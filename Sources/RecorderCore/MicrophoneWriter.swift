@@ -16,8 +16,26 @@ public enum EchoCancellationPolicy {
     }
 }
 
+enum MicrophoneEncodingProfile {
+    static func aacSettings(for device: AVCaptureDevice?) -> [String: Any] {
+        let description = device?.activeFormat.formatDescription
+        let stream = description.flatMap {
+            CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee
+        }
+        let sampleRate = stream?.mSampleRate ?? 48_000
+        let channelCount = max(1, Int(stream?.mChannelsPerFrame ?? 1))
+        return [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: channelCount,
+            AVEncoderBitRateKey: channelCount > 1 ? 192_000 : 128_000
+        ]
+    }
+}
+
 private protocol MicrophoneWriting: AnyObject {
     var audioLevel: Float { get }
+    var failureDescription: String? { get }
     func start(deviceID: String?, outputURL: URL) async throws
     func stop() async throws -> URL
 }
@@ -27,6 +45,7 @@ final class MicrophoneWriter {
     private(set) var appliedEchoCancellation = false
 
     var audioLevel: Float { backend?.audioLevel ?? 0 }
+    var failureDescription: String? { backend?.failureDescription }
 
     func start(
         configuration: CaptureConfiguration,
@@ -87,6 +106,10 @@ private final class VoiceProcessedMicrophoneWriter: MicrophoneWriting {
         levelLock.lock()
         defer { levelLock.unlock() }
         return latestLevel
+    }
+
+    var failureDescription: String? {
+        capturedWriteError()?.localizedDescription
     }
 
     func start(deviceID: String?, outputURL: URL) async throws {
@@ -218,20 +241,30 @@ private final class VoiceProcessedMicrophoneWriter: MicrophoneWriting {
 }
 
 private final class RawMicrophoneWriter: NSObject, MicrophoneWriting,
+    @unchecked Sendable,
     AVCaptureAudioDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "Recorder.MicrophoneWriter")
     private let session = AVCaptureSession()
+    private var audioOutput: AVCaptureAudioDataOutput?
     private var writer: AVAssetWriter?
     private var writerInput: AVAssetWriterInput?
     private var startedSession = false
     private var outputURL: URL?
-    private let levelLock = NSLock()
+    private let stateLock = NSLock()
     private var latestLevel: Float = 0
+    private var appendedSampleCount = 0
+    private var writerFailure: Error?
 
     var audioLevel: Float {
-        levelLock.lock()
-        defer { levelLock.unlock() }
+        stateLock.lock()
+        defer { stateLock.unlock() }
         return latestLevel
+    }
+
+    var failureDescription: String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return writerFailure?.localizedDescription
     }
 
     func start(deviceID: String?, outputURL: URL) async throws {
@@ -269,15 +302,16 @@ private final class RawMicrophoneWriter: NSObject, MicrophoneWriting,
         try? FileManager.default.removeItem(at: outputURL)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
         writer.movieFragmentInterval = CMTime(seconds: 10, preferredTimescale: 600)
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 128_000
-        ]
+        // Use AVFoundation's settings for the active input format. The previous
+        // fixed 48 kHz mono conversion can fail after capture has already
+        // started when macOS supplies a different microphone channel layout.
+        let settings = output.recommendedAudioSettingsForAssetWriter(
+            writingTo: .m4a
+        ) ?? MicrophoneEncodingProfile.aacSettings(for: device)
         let writerInput = AVAssetWriterInput(
             mediaType: .audio,
-            outputSettings: settings
+            outputSettings: settings,
+            sourceFormatHint: device.activeFormat.formatDescription
         )
         writerInput.expectsMediaDataInRealTime = true
         guard writer.canAdd(writerInput) else {
@@ -286,14 +320,25 @@ private final class RawMicrophoneWriter: NSObject, MicrophoneWriting,
         writer.add(writerInput)
         self.writer = writer
         self.writerInput = writerInput
+        self.audioOutput = output
         self.outputURL = outputURL
         startedSession = false
+        setCaptureState(level: 0, appendedSampleCount: 0, failure: nil)
 
-        await withCheckedContinuation { continuation in
-            queue.async {
-                self.session.startRunning()
-                continuation.resume()
+        do {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    self.session.startRunning()
+                    continuation.resume()
+                }
             }
+            try await waitUntilFirstSampleIsWritten()
+        } catch {
+            await stopSession()
+            writer.cancelWriting()
+            reset()
+            try? FileManager.default.removeItem(at: outputURL)
+            throw error
         }
     }
 
@@ -301,16 +346,53 @@ private final class RawMicrophoneWriter: NSObject, MicrophoneWriting,
         guard let writer, let writerInput, let outputURL else {
             throw RecorderError.invalidState("Microphone capture is not running.")
         }
+        await stopSession()
+        defer { reset() }
+
+        if writer.status == .writing {
+            writerInput.markAsFinished()
+            try await writer.finishWritingAsync()
+        } else if writer.status != .completed {
+            throw capturedFailure()
+                ?? writer.error
+                ?? RecorderError.captureFailed(
+                    "The microphone encoder stopped unexpectedly."
+                )
+        }
+        if let failure = capturedFailure() {
+            throw failure
+        }
+        guard hasWrittenSamples(),
+              (try? outputURL.resourceValues(
+                forKeys: [.fileSizeKey]
+              ).fileSize ?? 0) ?? 0 > 1_024 else {
+            throw RecorderError.captureFailed(
+                "The microphone did not produce a usable audio file."
+            )
+        }
+        return outputURL
+    }
+
+    private func waitUntilFirstSampleIsWritten() async throws {
+        for _ in 0..<100 {
+            if let failure = capturedFailure() { throw failure }
+            if hasWrittenSamples() { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw RecorderError.captureFailed(
+            "The microphone did not begin producing audio."
+        )
+    }
+
+    private func stopSession() async {
         await withCheckedContinuation { continuation in
             queue.async {
-                self.session.stopRunning()
-                writerInput.markAsFinished()
+                if self.session.isRunning {
+                    self.session.stopRunning()
+                }
                 continuation.resume()
             }
         }
-        try await writer.finishWritingAsync()
-        reset()
-        return outputURL
     }
 
     func captureOutput(
@@ -319,34 +401,103 @@ private final class RawMicrophoneWriter: NSObject, MicrophoneWriting,
         from connection: AVCaptureConnection
     ) {
         let level = AudioLevelMeter.normalizedLevel(from: sampleBuffer)
-        levelLock.lock()
+        stateLock.lock()
         latestLevel = level
-        levelLock.unlock()
+        stateLock.unlock()
         guard CMSampleBufferDataIsReady(sampleBuffer),
               let writer,
               let writerInput else { return }
+        if writer.status == .failed {
+            recordFailure(
+                writer.error
+                    ?? RecorderError.captureFailed(
+                        "The microphone encoder stopped unexpectedly."
+                    )
+            )
+            return
+        }
         if !startedSession {
-            guard writer.startWriting() else { return }
+            guard writer.startWriting() else {
+                recordFailure(
+                    writer.error
+                        ?? RecorderError.captureFailed(
+                            "The microphone encoder could not start."
+                        )
+                )
+                return
+            }
             writer.startSession(
                 atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             )
             startedSession = true
         }
         if writerInput.isReadyForMoreMediaData {
-            writerInput.append(sampleBuffer)
+            if writerInput.append(sampleBuffer) {
+                stateLock.lock()
+                appendedSampleCount += 1
+                stateLock.unlock()
+            } else {
+                recordFailure(
+                    writer.error
+                        ?? RecorderError.captureFailed(
+                            "The microphone encoder rejected an audio sample."
+                        )
+                )
+            }
+        } else if writer.status == .failed {
+            recordFailure(
+                writer.error
+                    ?? RecorderError.captureFailed(
+                        "The microphone encoder stopped unexpectedly."
+                    )
+            )
         }
     }
 
     private func reset() {
+        audioOutput?.setSampleBufferDelegate(nil, queue: nil)
         session.inputs.forEach(session.removeInput)
         session.outputs.forEach(session.removeOutput)
+        audioOutput = nil
         writer = nil
         writerInput = nil
         outputURL = nil
         startedSession = false
-        levelLock.lock()
+        stateLock.lock()
         latestLevel = 0
-        levelLock.unlock()
+        appendedSampleCount = 0
+        writerFailure = nil
+        stateLock.unlock()
+    }
+
+    private func hasWrittenSamples() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return appendedSampleCount > 0
+    }
+
+    private func capturedFailure() -> Error? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return writerFailure
+    }
+
+    private func recordFailure(_ error: Error) {
+        stateLock.lock()
+        if writerFailure == nil { writerFailure = error }
+        stateLock.unlock()
+    }
+
+    private func setCaptureState(
+        level: Float,
+        appendedSampleCount: Int,
+        failure: Error?
+    ) {
+        stateLock.lock()
+        latestLevel = level
+        self.appendedSampleCount = appendedSampleCount
+        writerFailure = failure
+        stateLock.unlock()
     }
 }
 

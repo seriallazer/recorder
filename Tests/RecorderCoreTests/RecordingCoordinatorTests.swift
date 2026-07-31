@@ -115,6 +115,43 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: working.appendingPathComponent("source.mov").path))
     }
 
+    func testLateCaptureFailureStopsImmediatelyAndPreservesWorkingFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(root.path, forKey: "RecorderLibraryPath")
+        let library = RecordingLibrary(defaults: defaults)
+        let capture = LateFailingCapture()
+        let coordinator = RecordingCoordinator(
+            library: library,
+            finalizer: FailingFinalizer(),
+            captureFactory: { _ in capture }
+        )
+
+        await coordinator.start(configuration: CaptureConfiguration(mode: .audio))
+        let recordingID = try XCTUnwrap(coordinator.activeRecording?.id)
+        capture.fail("Test encoder failure")
+
+        for _ in 0..<40 where coordinator.activeRecording != nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertNil(coordinator.activeRecording)
+        let recording = try XCTUnwrap(
+            library.recordings.first(where: { $0.id == recordingID })
+        )
+        XCTAssertEqual(recording.state, .failed)
+        XCTAssertTrue(recording.errorMessage?.contains("Test encoder failure") == true)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: library.folderURL(for: recordingID)
+                    .appendingPathComponent("working/source.m4a").path
+            )
+        )
+        XCTAssertEqual(capture.stopCallCount, 1)
+    }
+
     func testExportUsesCurrentUnsavedTrimSelection() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -261,6 +298,68 @@ private actor WorkingFileCapture: RecordingCapturing {
     func stop() async throws -> CaptureArtifacts {
         guard let sourceURL else { throw RecorderError.invalidState("Missing test capture") }
         return CaptureArtifacts(primaryMediaURL: sourceURL)
+    }
+}
+
+private final class LateFailingCapture: RecordingCapturing,
+    CaptureHealthProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var failure: String?
+    private var sourceURL: URL?
+    private var stops = 0
+
+    var captureFailureDescription: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return failure
+    }
+
+    var stopCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stops
+    }
+
+    func fail(_ description: String) {
+        lock.lock()
+        failure = description
+        lock.unlock()
+    }
+
+    func start(
+        configuration: CaptureConfiguration,
+        workingDirectory: URL
+    ) async throws -> CaptureArtifacts {
+        try FileManager.default.createDirectory(
+            at: workingDirectory,
+            withIntermediateDirectories: true
+        )
+        let url = workingDirectory.appendingPathComponent("source.m4a")
+        try Data("recoverable audio".utf8).write(to: url)
+        lock.withLock {
+            sourceURL = url
+        }
+        return CaptureArtifacts(
+            primaryMediaURL: url,
+            microphoneStemURL: url
+        )
+    }
+
+    func stop() async throws -> CaptureArtifacts {
+        let (url, failure) = lock.withLock {
+            stops += 1
+            return (sourceURL, self.failure)
+        }
+        if let failure {
+            throw RecorderError.captureFailed(failure)
+        }
+        guard let url else {
+            throw RecorderError.invalidState("Missing test capture")
+        }
+        return CaptureArtifacts(
+            primaryMediaURL: url,
+            microphoneStemURL: url
+        )
     }
 }
 

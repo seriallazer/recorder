@@ -1,6 +1,7 @@
 import Foundation
 
-public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding {
+public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding,
+    CaptureHealthProviding {
     private var microphoneWriter: MicrophoneWriter?
     private var systemAudioWriter: SystemAudioWriter?
     private var artifacts: CaptureArtifacts?
@@ -8,6 +9,9 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
     public init() {}
 
     public var audioLevel: Float { microphoneWriter?.audioLevel ?? 0 }
+    public var captureFailureDescription: String? {
+        microphoneWriter?.failureDescription
+    }
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
         guard artifacts == nil else { throw RecorderError.invalidState("Audio recording is already running.") }
@@ -61,6 +65,7 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
                 artifacts.primaryMediaURL = url
             } catch {
                 firstError = error
+                artifacts.microphoneStemURL = nil
             }
         }
         if let systemAudioWriter {
@@ -76,8 +81,14 @@ public final class AudioCaptureService: RecordingCapturing, AudioLevelProviding 
         microphoneWriter = nil
         systemAudioWriter = nil
         self.artifacts = nil
-        if artifacts.microphoneStemURL == nil, artifacts.systemStemURL == nil, let firstError {
+        if artifacts.microphoneStemURL == nil,
+           artifacts.systemStemURL == nil,
+           let firstError {
             throw firstError
+        }
+        if artifacts.microphoneStemURL == nil,
+           let system = artifacts.systemStemURL {
+            artifacts.primaryMediaURL = system
         }
         return artifacts
     }

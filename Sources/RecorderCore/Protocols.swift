@@ -10,6 +10,13 @@ public protocol AudioLevelProviding: AnyObject {
     var audioLevel: Float { get }
 }
 
+/// Capture services expose failures that can happen after `start` succeeds.
+/// Real-time encoders report some format/device errors only after receiving
+/// their first samples, so the coordinator must keep observing this value.
+public protocol CaptureHealthProviding: AnyObject {
+    var captureFailureDescription: String? { get }
+}
+
 public protocol MediaFinalizing: Sendable {
     func finalize(
         artifacts: CaptureArtifacts,

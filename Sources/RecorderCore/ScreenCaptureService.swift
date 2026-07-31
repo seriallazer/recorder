@@ -3,7 +3,9 @@ import AVFoundation
 import ScreenCaptureKit
 import CoreMedia
 
-public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLevelProviding, SCStreamOutput, SCStreamDelegate {
+public final class ScreenCaptureService: NSObject, RecordingCapturing,
+    AudioLevelProviding, CaptureHealthProviding, SCStreamOutput,
+    SCStreamDelegate {
     private let queue = DispatchQueue(label: "Recorder.ScreenCapture", qos: .userInitiated)
     private var stream: SCStream?
     private var writer: AVAssetWriter?
@@ -13,6 +15,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
     private var artifacts: CaptureArtifacts?
     private var writerStarted = false
     private var writerSessionStartTime: CMTime?
+    private var streamFailureDescription: String?
     private let lock = NSLock()
 
     public override init() {
@@ -20,6 +23,19 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
     }
 
     public var audioLevel: Float { microphoneWriter?.audioLevel ?? 0 }
+    public var captureFailureDescription: String? {
+        if let microphoneFailure = microphoneWriter?.failureDescription {
+            return microphoneFailure
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        if let streamFailureDescription { return streamFailureDescription }
+        if writer?.status == .failed {
+            return writer?.error?.localizedDescription
+                ?? "The screen encoder stopped unexpectedly."
+        }
+        return nil
+    }
 
     public func start(configuration: CaptureConfiguration, workingDirectory: URL) async throws -> CaptureArtifacts {
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
@@ -120,6 +136,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.stream = stream
         self.writerStarted = false
         self.writerSessionStartTime = nil
+        self.streamFailureDescription = nil
         let artifacts = CaptureArtifacts(
             primaryMediaURL: sourceURL,
             microphoneStemURL: micURL,
@@ -154,7 +171,13 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         // frames already accepted by AVAssetWriter.
         try? await stream.stopCapture()
         if let microphoneWriter {
-            artifacts.microphoneStemURL = try? await microphoneWriter.stop()
+            do {
+                artifacts.microphoneStemURL = try await microphoneWriter.stop()
+            } catch {
+                // Keep the independently recorded screen/system-audio source.
+                // A failed microphone stem must not poison usable screen media.
+                artifacts.microphoneStemURL = nil
+            }
         }
 
         let (writerStatus, writerError) = await finishWriterInputs(writer)
@@ -175,6 +198,7 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         self.artifacts = nil
         self.writerStarted = false
         self.writerSessionStartTime = nil
+        self.streamFailureDescription = nil
         return artifacts
     }
 
@@ -206,7 +230,9 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
-        // The coordinator observes writer failure when stop/finalization is attempted.
+        lock.lock()
+        streamFailureDescription = error.localizedDescription
+        lock.unlock()
     }
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
@@ -233,12 +259,18 @@ public final class ScreenCaptureService: NSObject, RecordingCapturing, AudioLeve
         guard writerStarted else { return }
         switch outputType {
         case .screen where videoInput?.isReadyForMoreMediaData == true:
-            _ = videoInput?.append(sampleBuffer)
+            if videoInput?.append(sampleBuffer) == false {
+                streamFailureDescription = writer.error?.localizedDescription
+                    ?? "The screen encoder rejected a video frame."
+            }
         case .audio where audioInput?.isReadyForMoreMediaData == true:
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             if let writerSessionStartTime,
                CMTimeCompare(presentationTime, writerSessionStartTime) >= 0 {
-                _ = audioInput?.append(sampleBuffer)
+                if audioInput?.append(sampleBuffer) == false {
+                    streamFailureDescription = writer.error?.localizedDescription
+                        ?? "The screen encoder rejected a system-audio sample."
+                }
             }
         default:
             break
