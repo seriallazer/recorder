@@ -41,7 +41,9 @@ jobs:
             echo 'Potential credential material found in tracked source.' >&2
             exit 1
           fi
-          if git grep -nE 'Mayank|mooniitk@gmail\.com|/Users/' -- ':!docs/HISTORY-SANITIZATION.md'; then
+          if git grep -nE 'Mayank|mooniitk@gmail\.com|/Users/' -- \
+            ':!docs/HISTORY-SANITIZATION.md' \
+            ':!.github/workflows/ci.yml'; then
             echo 'Private fixture or machine-specific path found in the public tree.' >&2
             exit 1
           fi
