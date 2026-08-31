@@ -31,8 +31,8 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>Recorder uses the selected microphone for audio, movie, and screen recordings.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Recorder captures a display, window, or selected region when you start a screen recording.</string>
+    <string>Recorder captures a display, window, selected region, or optional system audio only when you start a recording.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Local-only recording and transcription.</string>
+    <string>Copyright © 2026 Serial Lazer.</string>
 </dict>
 </plist>

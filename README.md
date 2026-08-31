@@ -1,84 +1,135 @@
 # Recorder
 
-A native macOS 14+ recorder with fully local English transcription and optional speaker diarization. It records microphone audio, audio-only meetings with separate system and microphone stems, camera video, or a display/window/region.
+A native macOS recorder with local transcription, guarded echo cleanup, and crash-isolated speaker diarization.
+
+Recorder captures microphone audio, separate microphone and system-audio meeting stems, camera video, or a display, window, or region. Recordings remain under the user's control in a local library. After the required Core ML models have been downloaded, transcription and speaker processing run on the Mac.
+
+> Recorder is currently distributed as source. The local build is ad-hoc signed for development and is not a notarized public binary.
+
+## Highlights
+
+- Native SwiftUI interface for audio, camera, and ScreenCaptureKit recording.
+- Separate microphone and system-audio stems when the capture mode supports them.
+- Fully local English transcription after the initial model download.
+- Automatic, stable, and enhanced speaker-attribution modes.
+- Speaker diarization in an isolated helper process so a native model failure cannot terminate Recorder or discard the ASR result.
+- Confidence-gated screen-echo cleanup with preserved rollback media.
+- Crash-recoverable recording state, non-destructive trimming, tags, and storage cleanup.
+- Configurable global shortcuts and a visible menu-bar recording indicator.
+
+## Privacy at a glance
+
+Recorder contains no upload, analytics, advertising, or telemetry implementation. Network access is used by FluidAudio to download missing or damaged model artifacts from Hugging Face. Inference uses local Core ML models after they are present on disk.
+
+Recordings, stems, thumbnails, manifests, and transcripts are stored unencrypted in the selected local library. They may contain highly sensitive information; users are responsible for protecting the library and obtaining any consent required to record other people.
+
+See [PRIVACY.md](PRIVACY.md) for the data flow, storage locations, permissions, and dependency boundary.
 
 ## Requirements
 
-- Apple Silicon Mac running macOS 14 or later
-- A build Mac running macOS 14.5 or later
-- Full Xcode 16.2 or later with its tools selected (`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`)
-- Internet access for the first build and the first local-model download
+- Apple Silicon Mac running macOS 14 or later.
+- A build Mac running macOS 14.5 or later.
+- Full Xcode 16.2 or later with its tools selected.
+- Internet access for the first package build and initial model downloads.
 
-The finished app does not require Xcode. Recordings never leave the Mac, and model inference makes no network requests after the initial model download.
-
-## Build
+Select Xcode if necessary:
 
 ```sh
-chmod +x scripts/build-app.sh
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -runFirstLaunch
+```
+
+## Build and run
+
+```sh
 scripts/build-app.sh
 open dist/Recorder.app
 ```
 
-If the Mac is still on macOS 14.4, update macOS before installing Xcode. Apple requires macOS 14.5 or later for Xcode 16.x, which supplies the Swift 6 toolchain required by FluidAudio.
+The script builds an Apple-Silicon release app, copies its notices and resources, signs nested helpers, and ad-hoc signs the app for local use. Rebuilding with the default bundle identifier retains a stable local Screen Recording identity. See [docs/RELEASING.md](docs/RELEASING.md) before distributing a binary.
 
-On first use, macOS requests camera and microphone access as needed. Screen & System Audio Recording access is needed for screen recording and for the optional **Record meeting/system audio** toggle in audio mode. If macOS asks you to quit the app after granting access, reopen `dist/Recorder.app`.
+## Permissions
 
-Local builds use a stable designated requirement for `local.recorder.app`, so rebuilding the same app does not create a new Screen Recording identity. When upgrading from an older build that used a code-hash identity, remove the old Recorder entry from Privacy & Security → Screen & System Audio Recording once, reopen the newly built app, and grant access again. Later rebuilds retain that identity.
+Recorder requests only the permissions needed by the chosen capture mode:
 
-## Global recording shortcut
+| Permission | Used for |
+| --- | --- |
+| Microphone | Audio, movie, and optional screen microphone capture |
+| Camera | Movie capture |
+| Screen & System Audio Recording | Display/window/region video and optional system-audio capture |
 
-While Recorder is running, press `⌘⌥M` for audio, `⌘⌥N` for the entire screen, or `⌘⌥B` for movie/video from any app. Press the same shortcut again to stop, save, and start local transcription automatically. While one mode is recording, the other mode shortcuts are blocked until capture finishes; the active recording can also be stopped from Recorder's UI or menu-bar menu. The modifier combination and letter for every mode can be changed under **Settings → Global Recording Shortcut**, which prevents duplicate mappings before applying changes. Settings also provides system-audio and microphone options. Shortcut screen and movie recordings default to 1080p at 30 fps and use the preferred internal microphone/camera.
+If macOS asks Recorder to quit after Screen & System Audio Recording access is granted, reopen `dist/Recorder.app`. Global shortcuts use the macOS hot-key API and do not require Accessibility permission.
 
-Recorder adds a subtle menu-bar waveform: muted gray with no suffix while idle, then bold with a small `a` for audio, `s` for screen, or `v` for movie/video capture. The menu shows elapsed time and can stop, save, and transcribe the active capture.
+## Recording shortcuts
 
-Because these are system-wide shortcuts, Recorder reserves the three configured key combinations while it is open; other apps will not receive them during that time.
+The defaults are:
 
-## Speaker echo cancellation
+- `⌘⌥M` — start or stop audio recording
+- `⌘⌥N` — start or stop full-screen recording
+- `⌘⌥B` — start or stop movie recording
 
-For compatible audio-only captures, **Echo cancellation: Auto** uses Apple's on-device voice processing to remove speaker playback from the default microphone before the stems are mixed. Automatic gain control is disabled and other-audio ducking is minimized so the local voice and meeting volume remain natural. Screen recording deliberately avoids live voice processing because it can reconfigure Core Audio underneath ScreenCaptureKit, delaying or failing capture. Instead, Auto analyzes representative sections of the completed system and microphone stems, estimates a stable leakage delay, and attenuates the matching system-audio activity in the microphone only when detection confidence is high. The cleaned microphone stem is used for the final movie and transcription. The original movie, audio, and microphone stem are retained as `*.pre-echo-cleanup.*` rollback files; cleanup Settings list them separately and never delete them without explicit opt-in. Detection or processing failures safely retain the raw recording. The recording manifest and Info popover report whether cancellation was actually applied. Set the option to **Off** in Settings to preserve raw microphone audio.
+Shortcuts, recording devices, system audio, and microphone behavior can be changed in Settings. While one mode is active, other recording shortcuts are blocked until capture finishes. The menu-bar waveform and in-app status remain visible during capture.
 
-Older screen recordings can be repaired on demand with the same guarded, non-destructive pipeline. Close or leave Recorder idle, then run:
+## Speaker attribution and echo cleanup
+
+For two-channel meetings, microphone and system audio are transcribed separately and merged chronologically. Enhanced diarization is reserved for mixed or multi-speaker tracks. It runs in `RecorderDiarizer`, a separate helper process with a stable fallback if the model fails.
+
+Audio-only echo cancellation uses Apple's on-device voice processing where compatible. Screen recording avoids live audio-device reconfiguration; after capture, Recorder samples the preserved microphone and system stems, estimates leakage delay, and applies cleanup only when confidence is high. Original files are retained as `*.pre-echo-cleanup.*` rollback media.
+
+The source-checkout repair utility can reprocess older completed screen recordings:
 
 ```sh
-scripts/repair-screen-echo.sh ~/Movies/Recorder/<recording-folder> --transcribe enhanced --expected-speakers 2
+scripts/repair-screen-echo.sh ~/Movies/Recorder/<recording-folder> \
+  --transcribe enhanced --expected-speakers 2
 ```
 
-The command only accepts completed screen recordings, changes nothing when confidence is insufficient, keeps raw media and the previous transcript as `*.pre-echo-cleanup.*`, and can immediately regenerate the transcript from the cleaned microphone stem.
-
-If a cleaned legacy recording was already transcribed, `--clean-existing-transcript` applies only the conservative time-aligned cross-channel de-duplication pass and preserves the prior files as `transcript.pre-cross-channel-dedup.*`.
-
-Use `--reprocess` to rebuild an already-cleaned recording from its preserved raw
-movie and microphone stem after cleanup improvements. The original rollback
-files are read-only inputs and are never replaced.
+This utility currently requires a source checkout and full Xcode; it is not included in the app-only bundle.
 
 ## Recording library
 
-Recorder defaults to `~/Movies/Recorder`. The location can be changed in Settings. Every recording has its own folder containing:
+The default library is `~/Movies/Recorder`; it can be changed in Settings. Each canonical recording folder may contain:
 
 - `recording.mov` or `recording.m4a`
 - `audio.m4a` for video transcription
-- separate `microphone.m4a` and `system.m4a` stems when available
+- `microphone.m4a` and `system.m4a` stems when available
 - `manifest.json`
 - `transcript.json` and `transcript.txt`
-- a thumbnail for video recordings
-- a `working` directory retained if capture or finalization is interrupted
+- a video thumbnail
+- a recoverable `working` directory if capture or finalization was interrupted
 
-The sidebar can be filtered by any existing tag. **Rename & Tag** offers the current tag list as well as an **Add New Tag…** option; organization links are updated without moving the canonical media folder. Settings also reports disposable library items and provides a confirmed cleanup action. Cleanup excludes active, failed, and recoverable recordings plus all current media, manifests, stems, transcripts, thumbnails, and exports. Preserved pre-echo-cleanup originals are listed separately and are deleted only when explicitly selected.
+Tag organization uses links without moving the canonical recording folder. Cleanup excludes active, failed, and recoverable recordings and requires separate opt-in before deleting rollback originals.
 
-## Local models
+## Models and reproducibility
 
-FluidAudio 0.15.5 is pinned exactly for reproducible builds. The first transcription downloads and validates the English Parakeet TDT v2 Core ML model. Auto or Enhanced mode downloads the offline speaker models on first use; later runs use the local cache.
+The Swift package dependency is pinned to FluidAudio `0.15.5` and source revision `19600a485baa4998812e4654b70d2bab8f2c9949`. Runtime model repositories are requested from Hugging Face by FluidAudio and are not revision- or checksum-pinned by Recorder, so model bytes may change independently of this source revision.
 
-Speaker attribution defaults to **Auto**. For long mixed recordings, Auto analyzes eight 20-second sections distributed across the timeline, ignores tiny outlier clusters, and selects stable labels for one meaningful voice or full enhanced diarization for multiple voices. Short recordings are analyzed in full. Separate microphone and system-audio stems remain preferred and Auto samples only the remote channel when deciding whether a panel needs additional separation.
+The English Parakeet TDT v2 model is downloaded for transcription. Auto or Enhanced speaker attribution additionally downloads the offline diarization models. Model files are stored by FluidAudio under `~/Library/Application Support/FluidAudio/Models`.
 
-**Stable** and **Enhanced** remain available as global settings and per-recording overrides. Enhanced diarization runs in a separate `RecorderDiarizer` helper process with a one-item Core ML batch on memory-constrained Macs. A native model crash or ordinary inference error cannot terminate Recorder or discard the ASR result: transcription automatically falls back to stable single-track/channel labels and records the decision or fallback in the transcript.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for software, model, and research attribution.
 
-Third-party attribution and model-license details are recorded in `THIRD_PARTY_NOTICES.md` and copied into the app bundle.
+## Architecture
+
+Recorder separates UI, capture, finalization, storage, and ML failure domains. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the component map, recording lifecycle, artifact handling, and fallback design.
 
 ## Tests
 
 ```sh
-swift test
+swift test --parallel
 ```
 
-Hardware capture and macOS permission flows require manual validation because automated tests cannot grant privacy permissions.
+The test suite covers capture timelines, finalization, library recovery, metadata, thumbnails, shortcut policy, transcription planning, speaker alignment, echo detection, guarded cleanup, and helper-process failure handling. Hardware capture and macOS privacy flows require manual validation; see [docs/TESTING.md](docs/TESTING.md).
+
+## Project documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Privacy](PRIVACY.md)
+- [Testing](docs/TESTING.md)
+- [Releasing](docs/RELEASING.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [History-sanitization plan](docs/HISTORY-SANITIZATION.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+Recorder is licensed under the [Apache License 2.0](LICENSE). Third-party software and models retain their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

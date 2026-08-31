@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test and assemble app
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Show toolchain
+        run: |
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Validate repository files
+        run: |
+          git diff --check
+          plutil -lint Resources/Info.plist Resources/Recorder.entitlements
+          zsh -n scripts/build-app.sh scripts/repair-screen-echo.sh
+
+      - name: Guard public source tree
+        run: |
+          if git grep -nE 'BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}'; then
+            echo 'Potential credential material found in tracked source.' >&2
+            exit 1
+          fi
+          if git grep -nE 'Mayank|mooniitk@gmail\.com|/Users/' -- ':!docs/HISTORY-SANITIZATION.md'; then
+            echo 'Private fixture or machine-specific path found in the public tree.' >&2
+            exit 1
+          fi
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Run tests
+        run: swift test --parallel
+
+      - name: Assemble local app
+        run: scripts/build-app.sh
+
+      - name: Verify app bundle
+        run: |
+          test -x dist/Recorder.app/Contents/MacOS/Recorder
+          test -x dist/Recorder.app/Contents/MacOS/RecorderDiarizer
+          test -f dist/Recorder.app/Contents/Info.plist
+          test -f dist/Recorder.app/Contents/Resources/AppIcon.icns
+          test -f dist/Recorder.app/Contents/Resources/LICENSE
+          test -f dist/Recorder.app/Contents/Resources/NOTICE
+          test -f dist/Recorder.app/Contents/Resources/THIRD_PARTY_NOTICES.md
+          test -f dist/Recorder.app/Contents/Resources/ThirdPartyLicenses/fastcluster-LICENSE.md
+          codesign --verify --deep --strict --verbose=2 dist/Recorder.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/Recorder.app/Contents/Info.plist)" = 'local.recorder.app'

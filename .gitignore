@@ -1,6 +1,13 @@
 .build/
 .swiftpm/
 .DS_Store
+.env
+.env.*
+!.env.example
+*.p12
+*.cer
+*.provisionprofile
+*.mobileprovision
 DerivedData/
 *.xcuserstate
 *.xcworkspace/xcuserdata/

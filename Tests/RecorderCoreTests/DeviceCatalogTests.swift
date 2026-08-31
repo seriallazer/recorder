@@ -5,7 +5,7 @@ final class DeviceCatalogTests: XCTestCase {
     func testPrefersMacBookAirMicrophone() {
         let devices = [
             MediaDevice(id: "external", name: "USB Microphone"),
-            MediaDevice(id: "airpods", name: "Mayank's AirPods Pro Microphone"),
+            MediaDevice(id: "airpods", name: "Personal AirPods Pro Microphone"),
             MediaDevice(id: "internal", name: "MacBook Air Microphone")
         ]
 
