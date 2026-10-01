@@ -14,7 +14,7 @@ let package = Package(
         .library(name: "RecorderCore", targets: ["RecorderCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.5")
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.4")
     ],
     targets: [
         .target(
